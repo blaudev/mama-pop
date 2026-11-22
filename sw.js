@@ -4,10 +4,14 @@
 // (y se guarda una copia); sin conexión se usa la copia guardada. Así, al
 // publicar cambios no hace falta tocar nada aquí para que lleguen.
 //
+// GitHub Pages dice al navegador que guarde cada archivo 10 minutos; por eso
+// se pide al servidor con `cache: 'no-cache'` (pregunta siempre si hay versión
+// nueva) y no con la copia de esos 10 minutos: lo publicado llega al momento.
+//
 // Si añades un archivo al juego, añádelo a ASSETS (el test test/pwa.test.js
 // avisa si falta alguno). Sube VERSION si quieres forzar a tirar las copias viejas.
 
-const VERSION = 'v1';
+const VERSION = 'v2';
 const CACHE = `mama-pop-${VERSION}`;
 
 const ASSETS = [
@@ -33,7 +37,7 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches
       .open(CACHE)
-      .then((cache) => cache.addAll(ASSETS))
+      .then((cache) => cache.addAll(ASSETS.map((url) => new Request(url, { cache: 'no-cache' }))))
       .then(() => self.skipWaiting()),
   );
 });
@@ -68,9 +72,10 @@ self.addEventListener('fetch', (event) => {
 
   if (url.origin !== self.location.origin) return;
 
-  // Archivos del juego: primero la red; si no hay conexión, la copia guardada.
+  // Archivos del juego: primero la red (sin la copia de 10 minutos del navegador);
+  // si no hay conexión, la copia guardada.
   event.respondWith(
-    fetch(request)
+    fetch(request, { cache: 'no-cache' })
       .then((res) => {
         if (res.ok) {
           const copy = res.clone();

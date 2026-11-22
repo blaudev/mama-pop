@@ -41,7 +41,7 @@ test('index.html enlaza el manifiesto, el icono de iOS y registra el service wor
   const html = read('index.html');
   assert.match(html, /<link rel="manifest" href="manifest\.webmanifest"/);
   assert.match(html, /<link rel="apple-touch-icon" href="icons\/apple-touch-icon\.png"/);
-  assert.match(html, /serviceWorker\.register\('\.\/sw\.js'\)/);
+  assert.match(html, /serviceWorker\.register\('\.\/sw\.js', \{ updateViaCache: 'none' \}\)/);
   assert.deepEqual(pngSize('icons/apple-touch-icon.png'), [180, 180]);
 });
 
@@ -57,4 +57,14 @@ test('el service worker guarda todos los archivos del juego para jugar sin conex
   ];
   for (const f of needed) assert.ok(list.includes(f), `sw.js no guarda «${f || './'}»`);
   for (const f of list) if (f) assert.ok(fs.existsSync(path.join(root, f)), `sw.js guarda «${f}», que no existe`);
+});
+
+test('el service worker no usa la copia de 10 minutos del navegador: lo publicado llega al momento', () => {
+  const sw = read('sw.js');
+  // los archivos del juego se piden al servidor preguntando siempre si hay versión nueva
+  assert.match(sw, /fetch\(request, \{ cache: 'no-cache' \}\)/);
+  // y la copia para jugar sin conexión también se hace con lo último del servidor
+  assert.match(sw, /new Request\(url, \{ cache: 'no-cache' \}\)/);
+  // el propio sw.js se busca sin caché del navegador al comprobar si hay versión nueva
+  assert.match(read('index.html'), /updateViaCache: 'none'/);
 });
