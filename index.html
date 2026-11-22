@@ -4,11 +4,23 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#0a3d6c" />
-    <title>Bubble Pop</title>
+    <title>Mama Pop</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;800&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="styles.css" />
+    <!-- Instalable como app (PWA): manifiesto, icono para iOS y service worker para jugar sin conexión -->
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Mama Pop" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
+      }
+    </script>
   </head>
   <body>
     <main class="app">
@@ -54,7 +66,7 @@
 
         <div id="overlay" class="overlay">
           <div class="card">
-            <h1 id="overlay-title">Bubble Pop</h1>
+            <h1 id="overlay-title">Mama Pop</h1>
             <p id="overlay-text"></p>
             <ul id="overlay-help" class="help">
               <li><b>Ratón</b>: apuntar y clic para disparar · <b>Dedo</b>: arrastra o mantén y suelta para disparar</li>

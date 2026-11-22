@@ -906,7 +906,7 @@ function showTheme(t) {
 
 function showIntro() {
   showOverlay({
-    title: 'Bubble Pop',
+    title: 'Mama Pop',
     text:
       '<span class="tagline">En busca del tesoro hundido</span>' +
       'Apunta y dispara. Junta <strong>3 o más</strong> burbujas del mismo color para explotarlas; lo que se quede colgando, cae.' +

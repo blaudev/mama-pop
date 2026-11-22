@@ -1,4 +1,4 @@
-# Bubble Pop
+# Mama Pop
 
 Juego de disparar burbujas para el navegador. HTML + JavaScript sin dependencias ni build.
 
