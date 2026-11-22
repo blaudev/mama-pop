@@ -56,6 +56,12 @@ El juego está dedicado a mamá. Al abrirlo sale una portada con su retrato en e
 una copa de vino) rodeado de los animales de las temáticas; desde ahí, «Jugar» lleva a las temáticas y «Cómo se
 juega», a las instrucciones. Los dibujos y la frase están en `src/dedication.js`.
 
+El icono de la app es la cara de mamá. Su dibujo está en `tools/icon.svg`; para volver a sacar los PNG (en macOS):
+
+```bash
+sips -s format png tools/icon.svg --out icons/icon-512.png && sips -z 192 192 icons/icon-512.png --out icons/icon-192.png && sips -z 180 180 icons/icon-512.png --out icons/apple-touch-icon.png
+```
+
 ## Temáticas
 
 Los niveles van en 5 temáticas de animales de 10 niveles cada una, cada vez más profundas y difíciles:
