@@ -37,6 +37,7 @@ import {
 import { launcherLayout, launcherPositions, hitsLauncher, inCancelZone, readyToShoot } from './launcher.js';
 import { BOARD, LEVELS, THEMES, LEVELS_PER_THEME, themeOf, themeProgress, parseMap, starsFor, shotsForStars, normalizeProgress, recordWin } from './levels.js';
 import { THEME_ART, animalSvg } from './animals.js';
+import { DEDICATION, MOM_SVG, CLOUD_SVG, HANDSOME_SVG, WINE_SVG } from './dedication.js';
 import { isDeliberateShot } from './input.js';
 import { CAMEO_EVERY, CAMEO_FIRST, makeCameo, cameoPose } from './cameo.js';
 
@@ -793,6 +794,7 @@ function showScreen(html, background) {
       else if (action === 'level') startLevel(Number(arg));
       else if (action === 'themes') showMenu();
       else if (action === 'help') showIntro();
+      else if (action === 'play') showMenu();
     }),
   );
   setTimeout(() => ui.screen.querySelector('[data-focus], button:not(:disabled)')?.focus(), 50);
@@ -903,6 +905,40 @@ function showTheme(t) {
 }
 
 
+
+/**
+ * Pantalla de inicio, dedicada a mamá: su retrato en el centro, pensando en
+ * un guapo y una copa de vino, rodeada de los animales de las temáticas.
+ */
+function showDedication() {
+  state.mode = 'menu';
+  const spots = ['tortuga', 'ballena', 'pulpo', 'medusa', 'caballito'];
+  const animals = spots
+    .map((key) => {
+      const theme = THEMES.find((t) => t.key === key);
+      return `<span class="ded-animal ded-${key}" style="background:${THEME_ART[key].bg}">${animalSvg(key, theme.name)}</span>`;
+    })
+    .join('');
+  showScreen(
+    `<div class="dedication">
+      <header class="ded-title"><h1>Mama Pop</h1><p>${esc(DEDICATION)}</p></header>
+      <div class="ded-thought">
+        ${CLOUD_SVG}
+        <span class="ded-handsome">${HANDSOME_SVG}</span>
+        <span class="ded-wine">${WINE_SVG}</span>
+        <span class="ded-heart h1" aria-hidden="true">♥</span><span class="ded-heart h2" aria-hidden="true">♥</span>
+      </div>
+      <span class="ded-dot d1" aria-hidden="true"></span><span class="ded-dot d2" aria-hidden="true"></span>
+      <div class="ded-mom">${MOM_SVG}</div>
+      ${animals}
+      <div class="ded-foot">
+        <button type="button" class="btn" data-action="play" data-focus>Jugar</button>
+        <button type="button" class="ded-link" data-action="help">Cómo se juega</button>
+      </div>
+    </div>`,
+    'linear-gradient(180deg, #2cc3d1 0%, #1592b0 28%, #0d5d86 55%, #0a3d6c 78%, #072852 100%)',
+  );
+}
 
 function showIntro() {
   showOverlay({
@@ -2591,6 +2627,6 @@ if (new URLSearchParams(location.search).has('debug')) window.bubblePop = { stat
 
 // Primera visita: cómo se juega. Si ya ha jugado: directo a los mapas.
 updateHud();
-if (state.progress.stars.some(Boolean)) showMenu();
-else showIntro();
+// Al abrir el juego, la dedicatoria; las instrucciones quedan en «Cómo se juega».
+showDedication();
 requestAnimationFrame(frame);

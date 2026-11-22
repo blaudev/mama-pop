@@ -50,6 +50,12 @@ derecha marca cuánto falta). Cada mapa tiene un límite de disparos; si se acab
 cruza la línea discontinua, pierdes. Vacía el mapa para completarlo: si te sobra al menos el 30 % de
 los disparos, 3 estrellas; el 10 %, 2; si no, 1. El progreso se guarda en el navegador.
 
+## Dedicatoria
+
+El juego está dedicado a mamá. Al abrirlo sale una portada con su retrato en el centro (pensando en un guapo y
+una copa de vino) rodeado de los animales de las temáticas; desde ahí, «Jugar» lleva a las temáticas y «Cómo se
+juega», a las instrucciones. Los dibujos y la frase están en `src/dedication.js`.
+
 ## Temáticas
 
 Los niveles van en 5 temáticas de animales de 10 niveles cada una, cada vez más profundas y difíciles:

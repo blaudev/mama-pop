@@ -17,6 +17,7 @@ const ASSETS = [
   './manifest.webmanifest',
   './src/animals.js',
   './src/cameo.js',
+  './src/dedication.js',
   './src/game.js',
   './src/input.js',
   './src/launcher.js',
