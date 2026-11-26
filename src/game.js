@@ -119,7 +119,19 @@ const sfx = (() => {
     comp.ratio.value = 4;
     out = ctx.createGain();
     out.gain.value = 0.9;
-    out.connect(comp).connect(ctx.destination);
+    // Ecualización pensada para el altavoz del móvil, que no da graves: se
+    // refuerzan los medios graves (donde sí responde) y se suavizan los
+    // agudos para que nada chille. En el ordenador apenas se nota.
+    const mids = ctx.createBiquadFilter();
+    mids.type = 'peaking';
+    mids.frequency.value = 320;
+    mids.Q.value = 0.9;
+    mids.gain.value = 4;
+    const highs = ctx.createBiquadFilter();
+    highs.type = 'highshelf';
+    highs.frequency.value = 4500;
+    highs.gain.value = -6;
+    out.connect(mids).connect(highs).connect(comp).connect(ctx.destination);
 
     // reverberación: respuesta al impulso hecha con ruido que se apaga
     const len = Math.floor(ctx.sampleRate * 1.4);
@@ -233,8 +245,38 @@ const sfx = (() => {
   }
 
   /** Golpe grave que cae de tono: el «bum» que da peso a una explosión o un despegue. */
-  const thump = ({ from = 120, to = 34, vol = 0.4, dur = 0.35, delay = 0 } = {}) =>
+  function thump({ from = 120, to = 34, vol = 0.4, dur = 0.35, delay = 0 } = {}) {
     voice(from, { to, glide: dur * 0.8, vol, decay: dur, delay, reverb: 0.5 });
+    punch({ from, to, vol: vol * 0.6, dur, delay });
+  }
+
+  /**
+   * El mismo golpe, saturado y filtrado entre 150 y 700 Hz: sus armónicos son
+   * lo que se oye del golpe en un altavoz que no da graves (el móvil), y el
+   * oído rellena el grave que falta.
+   */
+  function punch({ from, to, vol, dur, delay = 0 }) {
+    if (!ready()) return;
+    const t = ctx.currentTime + delay;
+    const o = ctx.createOscillator();
+    o.frequency.setValueAtTime(from, t);
+    o.frequency.exponentialRampToValueAtTime(to, t + dur * 0.8);
+    const pre = ctx.createGain();
+    pre.gain.value = 4; // empuja la onda contra la saturación
+    const sh = ctx.createWaveShaper();
+    sh.curve = driveCurve();
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 150;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 700;
+    const g = ctx.createGain();
+    env(g, t, vol, 0.005, dur);
+    o.connect(pre).connect(sh).connect(hp).connect(lp).connect(g).connect(out);
+    o.start(t);
+    o.stop(t + dur + 0.05);
+  }
 
   /** Ruido filtrado: soplidos y chasquidos. */
   function hiss({ from = 800, to = 2400, dur = 0.12, vol = 0.06, delay = 0, q = 1.2 } = {}) {
@@ -372,11 +414,16 @@ const sfx = (() => {
       const lp = ctx.createBiquadFilter();
       lp.type = 'lowpass';
       lp.frequency.value = 160;
+      const pre = ctx.createGain();
+      pre.gain.value = 3; // más saturación: armónicos que se oyen en el móvil
       const sh = ctx.createWaveShaper();
       sh.curve = driveCurve();
+      const body = ctx.createBiquadFilter(); // deja pasar el grave y sus armónicos hasta 600 Hz
+      body.type = 'lowpass';
+      body.frequency.value = 600;
       const rg = ctx.createGain();
       shape(rg, 0.3);
-      rumble.connect(lp).connect(sh).connect(rg).connect(out);
+      rumble.connect(lp).connect(pre).connect(sh).connect(body).connect(rg).connect(out);
 
       nodes.forEach((n) => {
         n.start(t);
