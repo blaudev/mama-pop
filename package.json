@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Juego de disparar burbujas para el navegador, sin dependencias.",
   "scripts": {
-    "start": "python3 -m http.server 5173",
+    "start": "python3 tools/serve.py 5173",
     "test": "node --test"
   }
 }

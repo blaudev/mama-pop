@@ -1,5 +1,4 @@
-// Genera los mapas de las temáticas que no están hechos a mano y los escribe
-// en src/maps.js. Cada mapa cumple lo que exige test/levels.test.js
+// Genera los mapas de todas las temáticas y los escribe en src/maps.js. Cada mapa cumple lo que exige test/levels.test.js
 // (simétrico, todo enganchado al techo, grupos pequeños, algún racimo que cae
 // de un disparo) y el bot lo gana; su límite de disparos sale del bot.
 //
@@ -12,23 +11,34 @@
 import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createGrid, findFloating, findCluster, colorsOnBoard } from '../src/logic.js';
-import { BOARD, COLOR_KEYS, parseMap, bubbleCount, addAnchors } from '../src/levels.js';
+import { BOARD, COLOR_KEYS, SHELL_KEYS, BICOLOR_KEYS, BICOLOR_PAIRS, parseMap, bubbleCount, addAnchors, REEF_SHAPES } from '../src/levels.js';
 import { playLevel, mulberry32 } from './bot.js';
 
 const COLS = BOARD.cols;
 const SEEDS = 8; // partidas del bot por mapa para fijar el límite
 
 /**
- * Temáticas generadas: `from`/`to` (0…1) dicen cuánto sube la dificultad en
- * toda la temática. `colors` fija cuántos colores lleva algún nivel (por su
- * posición antes de ordenar): niveles de 2 o 3 colores, más sencillos y
- * distintos, para empezar con calma o para respirar a mitad de temática.
+ * Colores de cada nivel de una temática, del 1 al 10: se empieza con 2 y se
+ * suma uno por nivel hasta llegar a los 6 en el 5.º. Lo comprueba
+ * test/levels.test.js.
+ */
+export const COLOR_PLAN = [2, 3, 4, 5, 6, 6, 6, 6, 6, 6];
+
+/** Nivel (índice dentro de la temática) desde el que salen bicolores y de dos golpes: del 5.º al 10.º. */
+export const SPECIALS_FROM = 4;
+
+/**
+ * Temáticas: `from`/`to` (0…1) dicen cuánto sube la dificultad en toda la
+ * temática. El Pulpo conserva las formas de sus mapas hechos a mano (en
+ * src/levels.js) y solo se vuelven a pintar con los colores de COLOR_PLAN; sus
+ * dos primeros niveles van sin anclas, para ir poco a poco.
  */
 const GENERATED_THEMES = [
-  { key: 'tortuga', from: 0.0, to: 0.35, seed: 101, colors: { 0: 2, 1: 2, 2: 3, 5: 2 } },
-  { key: 'caballito', from: 0.35, to: 0.65, seed: 303, colors: { 4: 2 } },
-  { key: 'medusa', from: 0.5, to: 0.82, seed: 404, colors: { 3: 2 } },
-  { key: 'ballena', from: 0.65, to: 1.0, seed: 505, colors: { 2: 2 } },
+  { key: 'tortuga', from: 0.0, to: 0.35, seed: 101 },
+  { key: 'pulpo', from: 0.2, to: 0.5, seed: 202, masks: REEF_SHAPES.map(maskOf), anchorsFrom: 2 },
+  { key: 'caballito', from: 0.35, to: 0.65, seed: 303 },
+  { key: 'medusa', from: 0.5, to: 0.82, seed: 404 },
+  { key: 'ballena', from: 0.65, to: 1.0, seed: 505 },
 ];
 
 const mirrorCol = (r, c) => (r % 2 ? 8 - c : 9 - c);
@@ -110,6 +120,33 @@ function paint(mask, rand, colors, maxGroup, pSame) {
   return map;
 }
 
+/**
+ * Pone burbujas de dos golpes y bicolores en un mapa, en parejas simétricas
+ * (de la fila 2 para abajo): `pairs` de cada tipo. La de dos golpes tapa la
+ * perla que había; la bicolor le suma un segundo color al azar. Devuelve el
+ * mapa nuevo (puede salir uno no válido: lo comprueba quien llama).
+ */
+export function addSpecialBubbles(map, rand, pairs) {
+  const rows = map.map((line) => [...line]);
+  const spots = [];
+  rows.forEach((row, r) => {
+    if (r < 2) return;
+    for (let c = 0; c < Math.floor(width(r) / 2); c++) if (COLOR_KEYS.includes(row[c])) spots.push([r, c]);
+  });
+  spots.sort(() => rand() - 0.5);
+  const put = (r, c, ch) => {
+    rows[r][c] = ch;
+    rows[r][mirrorCol(r, c)] = ch;
+  };
+  for (const [r, c] of spots.splice(0, pairs)) put(r, c, SHELL_KEYS[COLOR_KEYS.indexOf(rows[r][c])]);
+  for (const [r, c] of spots.splice(0, pairs)) {
+    const a = COLOR_KEYS.indexOf(rows[r][c]);
+    const options = BICOLOR_PAIRS.map((pair, i) => [pair, i]).filter(([pair]) => pair.includes(a));
+    put(r, c, BICOLOR_KEYS[options[Math.floor(rand() * options.length)][1]]);
+  }
+  return rows.map((row) => row.join(''));
+}
+
 /** Racimos de 2-3 del mismo color que, al explotar, sueltan 5 o más (como en el test). */
 function oneShotBunches(map) {
   const g = parseMap(map);
@@ -148,44 +185,75 @@ function valid(map, maxGroup) {
   return true;
 }
 
+/** Forma de un mapa ya hecho (qué casillas tienen burbuja, anclas incluidas). */
+export function maskOf(map) {
+  return map.map((row) => [...row].map((ch) => ch !== '.'));
+}
+
 /**
- * Un mapa de dificultad `d` (0…1); `forceColors` fija cuántos colores lleva.
- * Devuelve { map, maxGroup, shots, median }.
+ * Un mapa de dificultad `d` (0…1) con `nColors` colores exactos. `mask` usa
+ * esa forma en vez de inventar una; `anchors` dice si lleva anclas (por
+ * defecto, a partir de los primeros niveles). Devuelve { map, maxGroup, shots, median }.
  */
-export function generateMap(d, seed, forceColors) {
+export function generateMap(d, seed, nColors, { mask = null, anchors = d >= 0.1, specials = false } = {}) {
   const rand = mulberry32(seed);
   const rows = Math.round(28 + 24 * d + rand() * 4);
-  const nColors = forceColors ?? Math.min(6, 3 + Math.round(3.2 * d));
-  const colors = [0, 1, 2, 3, 4, 5].sort(() => rand() - 0.5).slice(0, nColors);
   // con pocos colores no hay forma de que todos los grupos sean de 1 o 2: se permiten los de 3
   const maxGroup = d < 0.3 || nColors <= 3 ? 3 : 2;
   const pSame = 0.55 - 0.45 * d;
   for (let attempt = 0; attempt < 400; attempt++) {
-    let map = paint(makeMask(rows, rand, d), rand, colors, maxGroup, pSame);
-    if (!valid(map, maxGroup)) continue;
-    // a partir de los primeros niveles, anclas que rompen su columna al tocarlas
-    if (d >= 0.1) {
+    const colors = [0, 1, 2, 3, 4, 5].sort(() => rand() - 0.5).slice(0, nColors);
+    let map = paint(mask ?? makeMask(rows, rand, d), rand, colors, maxGroup, pSame);
+    // una forma hecha a mano conserva sus filas vacías del final (alguna es corta y se rellena así)
+    while (mask && map.length < mask.length) map.push('.'.repeat(COLS));
+    if (!valid(map, maxGroup) || colorsOnBoard(parseMap(map)).length !== nColors) continue;
+    // anclas que rompen su columna al tocarlas
+    if (anchors) {
       const anchored = addAnchors(map);
       if (valid(anchored, maxGroup)) map = anchored;
+    }
+    // en los niveles difíciles, bicolores y de dos golpes (más cuanto más difícil)
+    if (specials) {
+      map = addSpecialBubbles(map, rand, 2 + Math.round(2 * d));
+      if (!valid(map, maxGroup)) continue;
     }
     const runs = Array.from({ length: SEEDS }, (_, i) => playLevel({ map }, { seed: i + 1 }));
     if (!runs.every((r) => r.won)) continue;
     const used = runs.map((r) => r.shots).sort((a, b) => a - b);
-    const margin = 1.5 - 0.35 * d; // más margen en los fáciles
-    const shots = Math.ceil((used.at(-1) * margin) / 5) * 5;
-    return { map, maxGroup, shots, median: used[Math.floor(used.length / 2)] };
+    const median = used[Math.floor(used.length / 2)];
+    // Límite justo: lo que necesita el bot en una partida normal (la mediana)
+    // más un margen, del 30 % en los fáciles al 5 % en los más difíciles. Quien
+    // juega falla más que el bot, pero tiene cohetes, minas y perlas arcoíris,
+    // que no gastan disparos. Nunca menos de lo que necesita con la semilla 1,
+    // que es la partida que comprueba test/levels.test.js.
+    const margin = 1.3 - 0.25 * d;
+    const shots = Math.max(Math.ceil(median * margin), runs[0].shots);
+    return { map, maxGroup, shots, median };
   }
-  throw new Error(`No sale un mapa válido con dificultad ${d} y semilla ${seed}`);
+  throw new Error(`No sale un mapa válido con dificultad ${d}, ${nColors} colores y semilla ${seed}`);
 }
 
-/** Los 10 niveles de una temática, de menos a más difícil. */
-export function generateTheme({ from, to, seed, colors = {} }) {
-  const maps = Array.from({ length: 10 }, (_, k) => generateMap(from + ((to - from) * k) / 9, seed * 100 + k, colors[k]));
-  // El orden final lo marca lo que le cuesta al bot, para que la dificultad suba de verdad.
-  // Los niveles de pocos colores se quedan en su sitio: son el respiro de la temática.
-  const fixed = new Set(Object.keys(colors).map(Number));
-  const sorted = maps.filter((_, k) => !fixed.has(k)).sort((a, b) => a.median - b.median || a.shots - b.shots);
-  return maps.map((m, k) => (fixed.has(k) ? m : sorted.shift()));
+/**
+ * Los 10 niveles de una temática, de menos a más difícil. `masks` (opcional)
+ * da la forma de cada nivel y `anchorsFrom`, desde qué nivel llevan anclas.
+ */
+export function generateTheme({ from, to, seed, masks = null, anchorsFrom = null }) {
+  const maps = Array.from({ length: 10 }, (_, k) => {
+    const d = from + ((to - from) * k) / 9;
+    const anchors = anchorsFrom == null ? d >= 0.1 : k >= anchorsFrom;
+    return generateMap(d, seed * 100 + k, COLOR_PLAN[k], { mask: masks?.[k], anchors, specials: k >= SPECIALS_FROM });
+  });
+  // Entre los niveles con los mismos colores, el orden lo marca lo que le
+  // cuesta al bot, para que la dificultad suba de verdad.
+  const out = maps.slice();
+  for (let k = 0; k < out.length; ) {
+    let end = k;
+    while (end < out.length && COLOR_PLAN[end] === COLOR_PLAN[k]) end++;
+    const run = out.slice(k, end).sort((a, b) => a.median - b.median || a.shots - b.shots);
+    out.splice(k, run.length, ...run);
+    k = end;
+  }
+  return out;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

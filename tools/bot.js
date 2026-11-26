@@ -10,6 +10,7 @@ import {
   placeBubble,
   simulateShot,
   colorsOnBoard,
+  colorsOf,
   isEmpty,
   neighbors,
   lowestOccupiedRow,
@@ -18,6 +19,7 @@ import {
   nextCamera,
   colorsToAvoid,
   chooseColor,
+  reachableColors,
   visibleRows,
   rotateAnchors,
 } from '../src/logic.js';
@@ -40,7 +42,7 @@ function evaluate(grid, cell, color, lowest, visible) {
   const g = cloneGrid(grid);
   const res = placeBubble(g, cell.row, cell.col, color, { visible });
   if (res.popped.length) return 100 + res.popped.length + res.dropped.length * 1.5;
-  const same = neighbors(grid, cell.row, cell.col).filter(([r, c]) => grid.cells[r][c] === color).length;
+  const same = neighbors(grid, cell.row, cell.col).filter(([r, c]) => colorsOf(grid.cells[r][c]).includes(color)).length;
   return same * 5 - Math.max(0, cell.row - lowest) * 4 - cell.row * 0.01;
 }
 
@@ -50,8 +52,13 @@ export function playLevel(level, { seed = 1, angles = 80, maxShots = 2000 } = {}
   const rand = mulberry32(seed);
   // Misma cola de colores que el juego (ver colorsToAvoid).
   let history = [];
-  const pick = (queue = []) => chooseColor(colorsOnBoard(grid), colorsToAvoid(history, queue), rand);
   let cam = initialCamera(grid, R, BOARD.frontY, BOARD.blockPx);
+  // y, como en el juego, casi siempre de un color que pueda explotar algo desde el lanzador
+  const pick = (queue = []) => {
+    const start = { x: BOARD.shooterX, y: BOARD.shooterY + cam };
+    const useful = reachableColors(grid, start, R, BOARD.width, { minAngle: BOARD.minAngle });
+    return chooseColor(colorsOnBoard(grid), colorsToAvoid(history, queue), rand, useful);
+  };
   let current = pick();
   let next = pick([current]);
   let shots = 0;

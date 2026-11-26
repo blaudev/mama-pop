@@ -20,7 +20,10 @@ pausa corta (0,35 s) para evitar dobles toques. Cuando caen bolas, el mapa esper
 pantalla antes de bajar.
 
 **Bolas propuestas:** siempre de un color que quede en el mapa, nunca tres seguidas del mismo color
-y, si fallas dos seguidas del mismo color, la siguiente es de otro.
+y, si fallas dos seguidas del mismo color, la siguiente es de otro. Además, 3 de cada 4 veces sale un color
+que puede explotar algo desde el lanzador: el juego prueba hacia dónde se puede disparar y no cuenta los
+grupos escondidos detrás de burbujas de otros colores (`reachableColors` en `src/logic.js`). El bot de
+`tools/bot.js` elige las bolas igual, así que los límites de disparos ya lo tienen en cuenta.
 
 **Cohete:** cada 3 disparos seguidos explotando algo ganas un cohete, que se guarda en la barra de abajo (el
 número dice cuántos tienes; se guardan y pasan de un mapa a otro). Tócalo (o pulsa R) para cargarlo en el cañón cuando quieras; vuelve a
@@ -33,6 +36,15 @@ una bola se pega tocando un ancla, rompe todo lo que hay hacia donde apunta (no 
 parte del mapa que se ve. Si rompe otra ancla, esa salta también hacia donde apunte ella. Después de cada
 disparo, todas las flechas giran un paso en el sentido del reloj. El cohete y la mina también las hacen saltar,
 y la mira marca lo que rompería. Aparecen a partir del 4.º nivel de la Tortuga y del 3.º del Pulpo.
+
+**Bicolores (en el mapa):** perlas mitad de un color y mitad de otro. Valen por cualquiera de sus dos colores:
+una roja y verde explota con un grupo de rojas o con uno de verdes. No unen un grupo de un color con uno del otro.
+
+**De dos golpes (en el mapa):** salen tapadas por una concha de color arena que no cuenta para ningún grupo. Las
+destapa una bola que se pegue a ellas, sea del color que sea, o una explosión a su lado; desde entonces son perlas
+normales de su color. El cohete, la mina y las anclas las rompen directamente, tapadas o no.
+
+Las bicolores y las de dos golpes solo salen en los niveles difíciles, del 5.º al 10.º de cada temática.
 
 **Mina:** se gana cada vez que un disparo explota 3 o más bolas del mismo color. Vuela como una perla y, al pegarse, explota y
 rompe todo lo que haya a 2 casillas, sea del color que sea. Tecla M.
@@ -75,8 +87,13 @@ gran profundidad con el barco hundido), más oscuro cuanto más profunda. Cada m
 animal de la temática cruza el fondo nadando por detrás de las perlas y a mitad de camino se para a saludar
 (`src/cameo.js`).
 
-Los mapas del Pulpo son los de siempre (en `src/levels.js`). Los de las otras cuatro temáticas los genera
-`tools/generate-maps.js` y los guarda en `src/maps.js` (no se edita a mano):
+En cada temática los colores van subiendo: el nivel 1 tiene 2 colores, el 2 tiene 3, el 3 tiene 4, el 4 tiene 5
+y del 5 al 10 salen los 6 (`COLOR_PLAN` en `tools/generate-maps.js`). A partir del 5.º la dificultad sigue subiendo con
+mapas más largos, grupos más pequeños, anclas y menos disparos de margen.
+
+Todos los mapas los genera `tools/generate-maps.js` y los guarda en `src/maps.js` (no se edita a mano). Los del
+Pulpo conservan las formas hechas a mano de `src/levels.js`; el generador solo las vuelve a pintar con los colores
+que tocan:
 
 ```bash
 node tools/generate-maps.js
@@ -86,16 +103,18 @@ El generador es determinista, comprueba las mismas reglas que los tests y fija e
 
 ## Mapas
 
-Están en `src/levels.js`. Cada fila es un texto de 10 letras (la primera fila es el techo):
+Están en `src/maps.js` (y las formas del Pulpo, en `src/levels.js`). Cada fila es un texto de 10 letras (la primera fila es el techo):
 `r` rojo · `o` naranja · `y` amarillo · `g` verde · `b` azul · `p` morado · `v` ancla · `.` hueco.
+Las de dos golpes van con la letra de su color en mayúscula (`R O Y G B P`), y las bicolores, con una letra por
+pareja de colores (`BICOLOR_KEYS` en `src/levels.js`: `a` rojo-naranja, `c` rojo-amarillo… `t` azul-morado).
 La 2.ª, 4.ª, 6.ª… fila se dibujan desplazadas media burbuja a la derecha y tienen una bola menos
 (la última letra va siempre a `.`), para que los mapas puedan ser simétricos de izquierda a derecha.
 `shots` es el límite de disparos.
 
 Están hechos para ser difíciles: casi ningún color forma grupos de más de 2, así que cada explosión
 hay que prepararla. A cambio, cada mapa tiene **racimos**: grupos que cuelgan de un tallo cuyo color
-forma un grupo de 2 o 3, así que una sola bola bien puesta los suelta enteros. Los tres primeros mapas
-son más suaves (4 colores y algunos grupos de 3). `npm test` comprueba que cada mapa es válido (ancho correcto, simétrico, ninguna
+forma un grupo de 2 o 3, así que una sola bola bien puesta los suelta enteros. Los primeros mapas de cada
+temática son más suaves (menos colores y algunos grupos de 3). `npm test` comprueba que cada mapa es válido (ancho correcto, simétrico, ninguna
 burbuja suelta, grupos pequeños, al menos un racimo) y que el bot de `tools/bot.js` lo gana sin pasarse del límite. Para ver
 cuántos disparos necesita el bot en cada mapa:
 

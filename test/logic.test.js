@@ -19,6 +19,7 @@ import {
   matchPreview,
   colorsToAvoid,
   chooseColor,
+  reachableColors,
   earnsRocket,
   rocketPath,
   fireRocket,
@@ -41,6 +42,10 @@ import {
   anchorBlast,
   rotateAnchors,
   visibleRows,
+  bicolorValue,
+  shellValue,
+  colorsOf,
+  bubblesLeft,
 } from '../src/logic.js';
 
 const R = 10;
@@ -283,6 +288,38 @@ test('colorsToAvoid: tras fallar dos seguidas del mismo color, ese color no sale
   assert.deepEqual(colorsToAvoid([hit(2), miss(2)]), [], 'una de las dos explotó');
   assert.deepEqual(colorsToAvoid([miss(1), miss(2)]), [], 'colores distintos');
   assert.deepEqual(colorsToAvoid([miss(2)]), []);
+});
+
+test('reachableColors: un color cuya pareja se alcanza desde el lanzador sirve', () => {
+  const g = createGrid(5, 10);
+  g.cells[0][2] = 1;
+  g.cells[0][3] = 1;
+  g.cells[0][0] = 2; // sola: un disparo de este color no explota nada
+  const width = 5 * 2 * R + R;
+  const start = { x: width / 2, y: 300 };
+  assert.deepEqual(reachableColors(g, start, R, width), [1]);
+});
+
+test('reachableColors: no cuenta un color que solo explotaría detrás de una pared de otros', () => {
+  // Fila 0: verdes (3) detrás; fila 1: pared de rojos (1) y amarillos (2)
+  // alternos, sin parejas. La esquina de la fila 0 es amarilla para que no
+  // quede ningún hueco por el que llegar a los verdes.
+  const g = createGrid(10, 14);
+  for (let c = 0; c < 9; c++) g.cells[0][c] = 3;
+  g.cells[0][9] = 2;
+  for (let c = 0; c < 9; c++) g.cells[1][c] = c % 2 ? 2 : 1;
+  const width = 10 * 2 * R + R;
+  const start = { x: width / 2, y: 500 };
+  assert.deepEqual(reachableColors(g, start, R, width), []);
+});
+
+test('chooseColor prefiere los colores que sirven, pero los demás también salen', () => {
+  // con el primer número bajo se elige entre los que sirven; si no, entre todos
+  const seq = (...xs) => () => xs.shift();
+  assert.equal(chooseColor([1, 2, 3], [], seq(0.1, 0.0), [3]), 3);
+  assert.equal(chooseColor([1, 2, 3], [], seq(0.1, 0.99), [3]), 3);
+  assert.equal(chooseColor([1, 2, 3], [], seq(0.9, 0.0), [3]), 1, 'a veces sale uno que no sirve');
+  assert.equal(chooseColor([1, 2, 3], [3], seq(0.1, 0.0), [3]), 1, 'lo que hay que evitar se sigue evitando');
 });
 
 test('colorsToAvoid: nunca tres bolas seguidas del mismo color en la cola', () => {
@@ -545,4 +582,83 @@ test('fireRocket y placeMine: si rompen un ancla, salta hacia donde apunta', () 
   const m = gridWithAnchors(['12345', '5432.', '13A24', '.....']);
   const mine = placeMine(m, 3, 2); // (2, 2) está a un paso
   assert.ok(mine.anchors.length === 1 && m.cells[0][2] === null);
+});
+
+// ── Burbujas bicolor y de dos golpes ─────────────────────────────────────
+
+test('colorsOf: una perla vale por su color, una bicolor por los dos y las demás por ninguno', () => {
+  assert.deepEqual(colorsOf(2), [2]);
+  assert.deepEqual(colorsOf(bicolorValue(3, 1)), [1, 3]);
+  assert.deepEqual(colorsOf(shellValue(4)), [], 'tapada no se ve su color');
+  assert.deepEqual(colorsOf(anchorValue(0)), []);
+});
+
+test('bicolor: explota con una bola de cualquiera de sus dos colores', () => {
+  for (const color of [1, 3]) {
+    const g = createGrid(5, 8);
+    g.cells[0][0] = bicolorValue(1, 3);
+    g.cells[0][1] = color;
+    const res = placeBubble(g, 1, 0, color);
+    assert.equal(res.popped.length, 3, `con el color ${color}`);
+  }
+});
+
+test('bicolor: no une un grupo de un color con uno del otro', () => {
+  const g = createGrid(5, 8);
+  g.cells[0][0] = 1;
+  g.cells[0][1] = bicolorValue(1, 3);
+  g.cells[0][2] = 3;
+  g.cells[0][3] = 3;
+  const res = placeBubble(g, 1, 0, 1);
+  assert.deepEqual(sorted(res.popped.map((b) => [b.row, b.col])), sorted([[0, 0], [0, 1], [1, 0]]));
+  assert.equal(g.cells[0][2], 3);
+  assert.equal(g.cells[0][3], 3);
+  assert.equal(matchPreview(g, 1, 3, 1).cells.length, 0, 'los verdes no cuentan para el rojo');
+});
+
+test('colorsOnBoard cuenta los dos colores de una bicolor y no el de una tapada', () => {
+  const g = createGrid(5, 8);
+  g.cells[0][0] = bicolorValue(0, 5);
+  g.cells[0][1] = shellValue(2);
+  assert.deepEqual(colorsOnBoard(g), [0, 5]);
+});
+
+test('de dos golpes: tapada no cuenta para el grupo y una bola pegada la destapa', () => {
+  const g = createGrid(5, 8);
+  g.cells[0][0] = shellValue(2);
+  g.cells[0][1] = 2;
+  const res = placeBubble(g, 1, 0, 2);
+  assert.equal(res.popped.length, 0, 'la tapada no completa el grupo de 3');
+  assert.deepEqual(res.uncovered, [{ row: 0, col: 0, color: 2 }]);
+  assert.equal(g.cells[0][0], 2, 'ya muestra su color');
+  // ahora sí cuenta: el siguiente rojo junto a las tres explota
+  assert.equal(placeBubble(g, 1, 1, 2).popped.length, 4);
+});
+
+test('de dos golpes: una bola de cualquier color también la destapa', () => {
+  const g = createGrid(5, 8);
+  g.cells[0][0] = shellValue(2);
+  const res = placeBubble(g, 1, 0, 5);
+  assert.deepEqual(res.uncovered, [{ row: 0, col: 0, color: 2 }]);
+});
+
+test('de dos golpes: la destapa una explosión a su lado', () => {
+  const g = createGrid(5, 8);
+  g.cells[0][0] = shellValue(4);
+  g.cells[0][1] = 2;
+  g.cells[0][2] = 2;
+  const res = placeBubble(g, 1, 2, 2); // no la toca: solo explota el grupo de al lado
+  assert.equal(res.popped.length, 3);
+  assert.deepEqual(res.uncovered, [{ row: 0, col: 0, color: 4 }]);
+  assert.equal(g.cells[0][0], 4);
+});
+
+test('bubblesLeft cuenta todo lo que queda por romper: perlas, bicolores, tapadas y anclas', () => {
+  const g = createGrid(5, 8);
+  assert.equal(bubblesLeft(g), 0);
+  g.cells[0][0] = 1;
+  g.cells[0][1] = bicolorValue(0, 2);
+  g.cells[0][2] = shellValue(3);
+  g.cells[0][3] = anchorValue(2);
+  assert.equal(bubblesLeft(g), 4);
 });

@@ -1,10 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { findFloating, colorsOnBoard, findCluster } from '../src/logic.js';
+import { findFloating, colorsOnBoard, findCluster, bicolorValue, shellValue, isBicolor, isShell } from '../src/logic.js';
 import { playLevel } from '../tools/bot.js';
 import {
   BOARD,
   COLOR_KEYS,
+  BICOLOR_KEYS,
+  SHELL_KEYS,
   LEVELS,
   parseMap,
   bubbleCount,
@@ -17,6 +19,7 @@ import {
   LEVELS_PER_THEME,
   themeOf,
   themeProgress,
+  isDevHost,
 } from '../src/levels.js';
 
 test('parseMap convierte letras en colores y puntos en huecos', () => {
@@ -24,6 +27,26 @@ test('parseMap convierte letras en colores y puntos en huecos', () => {
   assert.deepEqual(g.cells[0], [0, 2, null]);
   assert.deepEqual(g.cells[1], [4, null, null]);
   assert.deepEqual(g.cells[2], [null, null, null]);
+});
+
+test('parseMap lee las bicolores (una letra por pareja de colores) y las de dos golpes (en mayúscula)', () => {
+  assert.equal(BICOLOR_KEYS.length, 15);
+  const g = parseMap([`${BICOLOR_KEYS[0]}${BICOLOR_KEYS[14]}R`, 'P..'], 3, 4);
+  assert.deepEqual(g.cells[0], [bicolorValue(0, 1), bicolorValue(4, 5), shellValue(0)]);
+  assert.deepEqual(g.cells[1], [shellValue(5), null, null]);
+});
+
+test('bicolores y de dos golpes solo en los niveles difíciles: ninguna del 1 al 4 y de las dos del 5 al 10', () => {
+  for (const theme of THEMES) {
+    theme.maps.forEach((level, i) => {
+      const cells = parseMap(level.map).cells.flat();
+      const bicolors = cells.filter(isBicolor).length;
+      const shells = cells.filter(isShell).length;
+      const where = `${theme.name} ${i + 1}`;
+      if (i < 4) assert.equal(bicolors + shells, 0, where);
+      else assert.ok(bicolors >= 2 && shells >= 2, `${where}: ${bicolors} bicolores, ${shells} de dos golpes`);
+    });
+  }
 });
 
 test('parseMap deja filas libres debajo del mapa para los disparos', () => {
@@ -102,13 +125,33 @@ test('en cada temática la dificultad sube: los 3 últimos niveles piden más di
   }
 });
 
-test('hay niveles de solo 2 colores: uno en cada temática generada y dos al empezar la Tortuga', () => {
+test('en cada temática los colores suben: 2, 3, 4 y 5 en los cuatro primeros niveles y los 6 del 5.º al 10.º', () => {
   const colorsIn = (level) => colorsOnBoard(parseMap(level.map)).length;
-  const twoColor = LEVELS.filter((level) => colorsIn(level) === 2);
-  assert.ok(twoColor.length >= 5, `solo ${twoColor.length} niveles de 2 colores`);
-  assert.equal(colorsIn(LEVELS[0]), 2, 'el primer nivel es de 2 colores');
-  for (const key of ['caballito', 'medusa', 'ballena']) {
-    assert.ok(twoColor.some((level) => THEMES[level.theme].key === key), `${key} no tiene ningún nivel de 2 colores`);
+  for (const theme of THEMES) {
+    assert.deepEqual(theme.maps.map(colorsIn), [2, 3, 4, 5, 6, 6, 6, 6, 6, 6], theme.name);
+  }
+});
+
+test('themeProgress: solo se puede entrar en los niveles ganados y en el que toca', () => {
+  const p = recordWin(emptyProgress(), 0, 3, LEVELS.length);
+  assert.deepEqual(themeProgress(p, 0).open, [true, true, false, false, false, false, false, false, false, false]);
+  assert.equal(themeProgress(p, 1).open.some(Boolean), false);
+});
+
+test('themeProgress con allOpen (en desarrollo): todas las temáticas y todos los niveles abiertos', () => {
+  for (let t = 0; t < THEMES.length; t++) {
+    const tp = themeProgress(emptyProgress(), t, { allOpen: true });
+    assert.equal(tp.unlocked, true);
+    assert.deepEqual(tp.open, Array(LEVELS_PER_THEME).fill(true));
+  }
+});
+
+test('isDevHost: el ordenador y la red de casa son desarrollo; lo publicado, no', () => {
+  for (const host of ['localhost', '127.0.0.1', '[::1]', '192.168.1.131', '10.0.0.5', '172.16.3.4', 'mac-de-dani.local']) {
+    assert.equal(isDevHost(host), true, host);
+  }
+  for (const host of ['blaudev.github.io', 'mamapop.es', '172.32.0.1', '8.8.8.8']) {
+    assert.equal(isDevHost(host), false, host);
   }
 });
 
@@ -172,7 +215,7 @@ for (const [i, level] of LEVELS.entries()) {
   test(`${THEMES[level.theme].name} ${level.number} (${level.name}) es grande, válido y se puede ganar`, () => {
     for (const row of level.map) {
       assert.equal(row.length, BOARD.cols, `fila «${row}» no mide ${BOARD.cols}`);
-      for (const ch of row) assert.ok(ch === '.' || ch === 'v' || COLOR_KEYS.includes(ch), `letra desconocida «${ch}»`);
+      for (const ch of row) assert.ok(ch === '.' || ch === 'v' || (COLOR_KEYS + BICOLOR_KEYS + SHELL_KEYS).includes(ch), `letra desconocida «${ch}»`);
     }
     assert.ok(level.map.length >= 28, 'el mapa es pequeño');
     // Simétrico de izquierda a derecha, forma y colores. Las filas desplazadas
@@ -203,5 +246,10 @@ for (const [i, level] of LEVELS.entries()) {
     const run = playLevel(level, { seed: 1 });
     assert.ok(run.won, `el bot pierde (${run.reason})`);
     assert.ok(run.shots <= level.shots, `el bot necesita ${run.shots} disparos de ${level.shots}`);
+    // justo: no sobran muchos más disparos de los que necesita el bot en una
+    // partida normal (la mediana de 3, porque una sola puede salir con suerte)
+    const median = [run.shots, playLevel(level, { seed: 2 }).shots, playLevel(level, { seed: 3 }).shots].sort((a, b) => a - b)[1];
+    const roomy = Math.max(Math.ceil(median * 1.5), median + 10);
+    assert.ok(level.shots <= roomy, `límite ${level.shots} para ${median} disparos del bot: sobran demasiados`);
   });
 }

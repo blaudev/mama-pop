@@ -2,12 +2,14 @@ import {
   placeBubble,
   isEmpty,
   colorsOnBoard,
+  bubblesLeft,
   cellCenter,
   rowHeight,
   simulateShot,
   matchPreview,
   colorsToAvoid,
   chooseColor,
+  reachableColors,
   bottomY,
   initialCamera,
   nextCamera,
@@ -29,13 +31,17 @@ import {
   earnedSpecials,
   isAnchor,
   anchorDir,
+  isBicolor,
+  isShell,
+  shellValue,
+  colorsOf,
   anchorsTouching,
   anchorBlast,
   rotateAnchors,
   visibleRows,
 } from './logic.js';
 import { launcherLayout, launcherPositions, hitsLauncher, inCancelZone, readyToShoot } from './launcher.js';
-import { BOARD, LEVELS, THEMES, LEVELS_PER_THEME, themeOf, themeProgress, parseMap, starsFor, shotsForStars, normalizeProgress, recordWin } from './levels.js';
+import { BOARD, LEVELS, THEMES, LEVELS_PER_THEME, themeOf, themeProgress, isDevHost, parseMap, starsFor, shotsForStars, normalizeProgress, recordWin } from './levels.js';
 import { THEME_ART, animalSvg } from './animals.js';
 import { DEDICATION, MOM_SVG, CLOUD_SVG, HANDSOME_SVG, WINE_SVG } from './dedication.js';
 import { isDeliberateShot } from './input.js';
@@ -55,6 +61,9 @@ const ROCKET_SPEED = 820; // px/s: algo más lento que una perla, para que se ve
 const MIN_ANGLE = BOARD.minAngle;
 // v3: niveles por temáticas de animales. El progreso anterior no se aprovecha.
 const PROGRESS_KEY = 'progress-v3';
+// En desarrollo (el ordenador o la red de casa) todos los niveles están abiertos, para probar cambios.
+const DEV = isDevHost(location.hostname);
+const progressOf = (t) => themeProgress(state.progress, t, { allOpen: DEV });
 const SCROLL_DELAY = 1; // s entre que empiezan a caer las bolas y el mapa baja
 const CAM_SPEED = 420; // px/s al bajar el mapa un bloque
 const INTRO_HOLD = 1.2; // s mostrando la parte de arriba antes de bajar
@@ -182,6 +191,51 @@ const sfx = (() => {
     voice(freq * 2.76, { vol: vol * 0.35, delay, decay: decay * 0.4, reverb: 1.4 });
   }
 
+  /** Curva de saturación para dar «garra» a los ruidos graves (motores, explosiones). */
+  let drive = null;
+  function driveCurve() {
+    if (drive) return drive;
+    drive = new Float32Array(1024);
+    for (let i = 0; i < drive.length; i++) {
+      const x = (i / (drive.length - 1)) * 2 - 1;
+      drive[i] = Math.tanh(x * 3.5);
+    }
+    return drive;
+  }
+
+  /**
+   * Ruido grave con cuerpo: paso bajo que se cierra de `from` a `to` Hz,
+   * saturado. Es el rugido de un cohete o el estruendo de una explosión.
+   */
+  function roar({ from = 1800, to = 400, dur = 1.4, vol = 0.3, attack = 0.02, delay = 0, reverb = 0.8 } = {}) {
+    if (!ready()) return;
+    const t = ctx.currentTime + delay;
+    const src = ctx.createBufferSource();
+    src.buffer = noise;
+    src.loop = true;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.Q.value = 0.7;
+    lp.frequency.setValueAtTime(from, t);
+    lp.frequency.exponentialRampToValueAtTime(to, t + dur);
+    const sh = ctx.createWaveShaper();
+    sh.curve = driveCurve();
+    const g = ctx.createGain();
+    env(g, t, vol, attack, dur);
+    src.connect(lp).connect(sh).connect(g).connect(out);
+    if (reverb) {
+      const send = ctx.createGain();
+      send.gain.value = reverb;
+      g.connect(send).connect(wet);
+    }
+    src.start(t);
+    src.stop(t + attack + dur + 0.05);
+  }
+
+  /** Golpe grave que cae de tono: el «bum» que da peso a una explosión o un despegue. */
+  const thump = ({ from = 120, to = 34, vol = 0.4, dur = 0.35, delay = 0 } = {}) =>
+    voice(from, { to, glide: dur * 0.8, vol, decay: dur, delay, reverb: 0.5 });
+
   /** Ruido filtrado: soplidos y chasquidos. */
   function hiss({ from = 800, to = 2400, dur = 0.12, vol = 0.06, delay = 0, q = 1.2 } = {}) {
     if (!ready()) return;
@@ -233,6 +287,8 @@ const sfx = (() => {
       const n = Math.min(i + Math.min(streak, 6) * 2, 16);
       const f = note(n);
       voice(f * 0.5, { to: f, glide: 0.035, vol: 0.15, decay: 0.12, delay, reverb: 0.6 });
+      voice(f * 0.25, { to: f * 0.75, glide: 0.03, vol: 0.08, decay: 0.07, delay, lp: 1200, reverb: 0 }); // cuerpo
+      hiss({ from: 3200, to: 5200, dur: 0.035, vol: 0.05, delay, q: 2 }); // chasquido de la burbuja
       bell(f * 2, { vol: 0.025, delay: delay + 0.01, decay: 0.3 });
     },
     /** Silbido de cohete y campanita cuando sale una bola en palmera. */
@@ -241,133 +297,97 @@ const sfx = (() => {
       bell(note(10 + Math.floor(Math.random() * 5)), { vol: 0.04, delay: delay + 0.12 });
     },
     /** Lluvia de campanitas para las avalanchas. */
-    avalanche: () => [10, 12, 14, 15, 17, 19].forEach((n, i) => bell(note(n), { vol: 0.05, delay: 0.15 + i * 0.07 })),
-    /**
-     * Rugido del cohete mientras vuela: ruido que sube de tono, un zumbido
-     * grave que tiembla y algo de reverberación. Devuelve una función para
-     * pararlo (y se para solo a los 3 s por si acaso).
-     */
-    rocket: () => {
-      if (!ready()) return () => {};
-      const t = ctx.currentTime;
-      const src = ctx.createBufferSource();
-      src.buffer = noise;
-      src.loop = true;
-      const bp = ctx.createBiquadFilter();
-      bp.type = 'bandpass';
-      bp.Q.value = 0.9;
-      bp.frequency.setValueAtTime(380, t);
-      bp.frequency.exponentialRampToValueAtTime(2200, t + 1.2);
-      const g = ctx.createGain();
-      env(g, t, 0.09, 0.08, 2.9);
-      src.connect(bp).connect(g).connect(out);
-      const send = ctx.createGain();
-      send.gain.value = 0.6;
-      g.connect(send).connect(wet);
-
-      const o = ctx.createOscillator();
-      o.type = 'sawtooth';
-      o.frequency.setValueAtTime(70, t);
-      o.frequency.exponentialRampToValueAtTime(150, t + 1.2);
-      const lfo = ctx.createOscillator(); // temblor del motor
-      lfo.frequency.value = 22;
-      const depth = ctx.createGain();
-      depth.gain.value = 18;
-      lfo.connect(depth).connect(o.frequency);
-      const lp = ctx.createBiquadFilter();
-      lp.type = 'lowpass';
-      lp.frequency.value = 520;
-      const og = ctx.createGain();
-      env(og, t, 0.07, 0.08, 2.9);
-      o.connect(lp).connect(og).connect(out);
-
-      const nodes = [src, o, lfo];
-      nodes.forEach((n) => {
-        n.start(t);
-        n.stop(t + 3.1);
-      });
-      return () => {
-        const e = ctx.currentTime;
-        for (const gain of [g, og]) {
-          gain.gain.cancelScheduledValues(e);
-          gain.gain.setValueAtTime(Math.max(gain.gain.value, 0.0002), e);
-          gain.gain.exponentialRampToValueAtTime(0.0001, e + 0.3);
-        }
-        nodes.forEach((n) => {
-          try {
-            n.stop(e + 0.35);
-          } catch {
-            /* ya parado */
-          }
-        });
-      };
+    avalanche: () => {
+      thump({ from: 90, to: 40, vol: 0.3, dur: 0.4 });
+      hiss({ from: 300, to: 2600, dur: 0.5, vol: 0.08, q: 0.7 });
+      [10, 12, 14, 15, 17, 19, 22].forEach((n, i) => bell(note(n), { vol: 0.055, delay: 0.12 + i * 0.06 }));
     },
     /**
-     * Motor del cohete cargado, de fondo: retumbar grave con traqueteo.
-     * Devuelve { set(nivel 0…1), stop() } o null si no hay sonido.
+     * Despegue del cohete: un chorro de propulsión que crece, se mantiene
+     * mientras sube y se aleja, sin golpe (el golpe es de la mina). Capas:
+     * - chorro: ruido que se abre de grave a agudo, como el escape al acelerar;
+     * - chisporroteo: el mismo ruido cortado muy deprisa, el crepitar de la llama;
+     * - retumbar: un zumbido grave y constante debajo;
+     * - alejamiento: el filtro sube y el volumen baja al final, como si se fuera.
      */
-    engine: () => {
-      if (!ready()) return null;
+    rocket: () => {
+      if (!ready()) return;
       const t = ctx.currentTime;
-      const src = ctx.createBufferSource();
-      src.buffer = noise;
-      src.loop = true;
+      const ATTACK = 0.18; // crece, no estalla
+      const HOLD = 0.75; // lo que tarda en cruzar la pantalla
+      const FADE = 0.9; // se aleja
+      const end = t + ATTACK + HOLD + FADE;
+      const shape = (g, vol) => {
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(vol, t + ATTACK);
+        g.gain.setValueAtTime(vol, t + ATTACK + HOLD);
+        g.gain.exponentialRampToValueAtTime(0.0001, end);
+      };
+      const nodes = [];
+      const noiseSrc = () => {
+        const src = ctx.createBufferSource();
+        src.buffer = noise;
+        src.loop = true;
+        src.loopStart = Math.random() * 0.5;
+        nodes.push(src);
+        return src;
+      };
+
+      // chorro
+      const jet = noiseSrc();
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.Q.value = 0.55;
+      bp.frequency.setValueAtTime(320, t);
+      bp.frequency.exponentialRampToValueAtTime(1400, t + ATTACK + HOLD);
+      bp.frequency.exponentialRampToValueAtTime(3200, end);
+      const jg = ctx.createGain();
+      shape(jg, 0.42);
+      jet.connect(bp).connect(jg).connect(out);
+      const send = ctx.createGain();
+      send.gain.value = 0.7;
+      jg.connect(send).connect(wet);
+
+      // chisporroteo: ruido agudo cuya ganancia salta 40 veces por segundo
+      const crackle = noiseSrc();
+      const hp = ctx.createBiquadFilter();
+      hp.type = 'highpass';
+      hp.frequency.value = 2500;
+      const gate = ctx.createGain();
+      gate.gain.value = 0.5;
+      const lfo = ctx.createOscillator();
+      lfo.type = 'square';
+      lfo.frequency.setValueAtTime(31, t);
+      lfo.frequency.linearRampToValueAtTime(47, end);
+      const depth = ctx.createGain();
+      depth.gain.value = 0.5;
+      lfo.connect(depth).connect(gate.gain);
+      nodes.push(lfo);
+      const cg = ctx.createGain();
+      shape(cg, 0.09);
+      crackle.connect(hp).connect(gate).connect(cg).connect(out);
+
+      // retumbar grave (sin caída de tono: no es una explosión)
+      const rumble = noiseSrc();
       const lp = ctx.createBiquadFilter();
       lp.type = 'lowpass';
-      lp.frequency.value = 260;
-      const ng = ctx.createGain();
-      ng.gain.value = 0;
-      src.connect(lp).connect(ng).connect(out);
+      lp.frequency.value = 160;
+      const sh = ctx.createWaveShaper();
+      sh.curve = driveCurve();
+      const rg = ctx.createGain();
+      shape(rg, 0.3);
+      rumble.connect(lp).connect(sh).connect(rg).connect(out);
 
-      const o = ctx.createOscillator();
-      o.type = 'sawtooth';
-      o.frequency.value = 48;
-      const olp = ctx.createBiquadFilter();
-      olp.type = 'lowpass';
-      olp.frequency.value = 180;
-      const og = ctx.createGain();
-      og.gain.value = 0;
-      o.connect(olp).connect(og).connect(out);
-
-      const lfo = ctx.createOscillator(); // traqueteo del motor
-      lfo.type = 'square';
-      lfo.frequency.value = 13;
-      const lfoDepth = ctx.createGain();
-      lfoDepth.gain.value = 0.015;
-      lfo.connect(lfoDepth).connect(ng.gain);
-
-      const nodes = [src, o, lfo];
-      nodes.forEach((n) => n.start(t));
-      ng.gain.setTargetAtTime(0.05, t, 0.15);
-      og.gain.setTargetAtTime(0.05, t, 0.15);
-      return {
-        set(level) {
-          const e = ctx.currentTime;
-          ng.gain.setTargetAtTime(0.05 + 0.1 * level, e, 0.05);
-          og.gain.setTargetAtTime(0.05 + 0.05 * level, e, 0.05);
-          lp.frequency.setTargetAtTime(260 + 1000 * level, e, 0.05);
-          o.frequency.setTargetAtTime(48 + 22 * level, e, 0.05);
-        },
-        stop() {
-          const e = ctx.currentTime;
-          for (const g of [ng.gain, og.gain]) {
-            g.cancelScheduledValues(e);
-            g.setTargetAtTime(0, e, 0.08);
-          }
-          nodes.forEach((n) => {
-            try {
-              n.stop(e + 0.5);
-            } catch {
-              /* ya parado */
-            }
-          });
-        },
-      };
+      nodes.forEach((n) => {
+        n.start(t);
+        n.stop(end + 0.05);
+      });
     },
     /** Explosión de la mina: golpe grave y estruendo que se apaga. */
     boom: () => {
-      voice(120, { to: 38, glide: 0.35, vol: 0.32, decay: 0.5, lp: 420, reverb: 1.2 });
-      hiss({ from: 1400, to: 140, dur: 0.6, vol: 0.22, q: 0.5 });
+      thump({ from: 150, to: 28, vol: 0.55, dur: 0.6 });
+      roar({ from: 3200, to: 160, dur: 1.1, vol: 0.4, attack: 0.005, reverb: 1.3 });
+      hiss({ from: 6000, to: 1500, dur: 0.12, vol: 0.12, q: 0.5 });
     },
     /** Destello de la perla arcoíris al pegarse. */
     sparkle: () => [12, 14, 16, 19].forEach((n, i) => bell(note(n), { vol: 0.045, delay: i * 0.05, decay: 0.5 })),
@@ -381,8 +401,6 @@ const sfx = (() => {
       bell(note(9), { vol: 0.035, decay: 0.4 });
       bell(note(12), { vol: 0.035, delay: 0.14, decay: 0.5 });
     },
-    /** «Blub» de burbuja que suelta el cohete al volar. */
-    blub: () => voice(700 + Math.random() * 900, { to: 1800 + Math.random() * 900, glide: 0.05, vol: 0.025, decay: 0.06, reverb: 0.8 }),
     /** Clic metálico al cargar o descargar una bola especial. */
     arm: (on) => {
       voice(on ? note(5) : note(7), { type: 'triangle', vol: 0.07, decay: 0.07 });
@@ -394,8 +412,17 @@ const sfx = (() => {
     scroll: () => hiss({ from: 300, to: 900, dur: 0.35, vol: 0.04, q: 0.8 }),
     /** Arpegio de campanas y acorde final. */
     win: () => {
-      [0, 2, 3, 5, 7, 8, 10].forEach((n, i) => bell(note(n), { vol: 0.07, delay: i * 0.09, decay: 0.9 }));
-      [0, 2, 3].forEach((n) => voice(note(n) / 2, { type: 'triangle', vol: 0.05, attack: 0.05, decay: 1.4, delay: 0.7, lp: 1800 }));
+      // fanfarria: tres notas que suben, un acorde grande y una lluvia de campanitas
+      [0, 2, 5].forEach((n, i) => {
+        voice(note(n), { type: 'triangle', vol: 0.11, attack: 0.01, decay: 0.22, delay: i * 0.13, lp: 3200 });
+        voice(note(n) / 2, { type: 'sawtooth', vol: 0.03, attack: 0.01, decay: 0.2, delay: i * 0.13, lp: 1400 });
+      });
+      [5, 7, 9, 10].forEach((n) => {
+        voice(note(n) / 2, { type: 'triangle', vol: 0.07, attack: 0.03, decay: 1.6, delay: 0.42, lp: 2600 });
+        voice(note(n) / 4, { type: 'sawtooth', vol: 0.025, attack: 0.05, decay: 1.4, delay: 0.42, lp: 900 });
+      });
+      thump({ from: 110, to: 50, vol: 0.25, dur: 0.5, delay: 0.42 });
+      [10, 12, 14, 15, 17, 19, 20].forEach((n, i) => bell(note(n), { vol: 0.05, delay: 0.55 + i * 0.07, decay: 0.9 }));
     },
     /** Tres notas que bajan, suaves. */
     lose: () =>
@@ -469,7 +496,52 @@ function hexA(hex, a) {
 
 // Tonos del ancla para los efectos (explosión, chispas, estela).
 const ANCHOR_TONE = { base: '#9fb4c8', light: '#e6f3ff', dark: '#3c4f63' };
-const toneOf = (v) => (isAnchor(v) ? ANCHOR_TONE : COLORS[v]);
+// Humo del despegue del cohete.
+const SMOKE_TONE = { base: '#d9e4ef', light: '#ffffff', dark: '#7d8fa3' };
+// Concha de las burbujas de dos golpes, mientras siguen tapadas.
+const SHELL_TONE = { base: '#c9bfae', light: '#f4efe6', dark: '#6f6656' };
+function toneOf(v) {
+  if (isAnchor(v)) return ANCHOR_TONE;
+  if (isShell(v)) return SHELL_TONE;
+  return COLORS[colorsOf(v)[0]];
+}
+
+/** Burbuja de dos golpes tapada: una concha de color arena con sus estrías, sin pista de su color. */
+const shellSprite = (() => {
+  const size = Math.ceil((R * 2 + 4) * DPR);
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d');
+  g.scale(DPR, DPR);
+  const cx = R + 2;
+  const r = R - BUBBLE_GAP;
+  const body = g.createRadialGradient(cx - r * 0.3, cx - r * 0.35, r * 0.1, cx, cx, r);
+  body.addColorStop(0, SHELL_TONE.light);
+  body.addColorStop(0.55, SHELL_TONE.base);
+  body.addColorStop(1, SHELL_TONE.dark);
+  g.save();
+  g.beginPath();
+  g.arc(cx, cx, r, 0, Math.PI * 2);
+  g.fillStyle = body;
+  g.fill();
+  g.clip();
+  // estrías en abanico desde abajo, como una concha de almeja
+  g.strokeStyle = 'rgba(90,78,60,0.45)';
+  g.lineWidth = 1.3;
+  for (let i = -2; i <= 2; i++) {
+    g.beginPath();
+    g.moveTo(cx, cx + r * 0.85);
+    g.quadraticCurveTo(cx + i * r * 0.45, cx, cx + i * r * 0.32, cx - r);
+    g.stroke();
+  }
+  g.restore();
+  g.strokeStyle = 'rgba(255,255,255,0.45)';
+  g.lineWidth = 1;
+  g.beginPath();
+  g.arc(cx, cx, r - 0.5, 0, Math.PI * 2);
+  g.stroke();
+  return c;
+})();
 
 /** Ancla del mapa: burbuja de metal; la flecha se dibuja encima, girada hacia donde apunta. */
 const anchorSprite = (() => {
@@ -541,7 +613,28 @@ function drawBubble(ctx, x, y, color, scale = 1, alpha = 1) {
     return;
   }
   ctx.globalAlpha = alpha;
-  ctx.drawImage(sprites[color], x - s, y - s, s * 2, s * 2);
+  if (isShell(color)) {
+    ctx.drawImage(shellSprite, x - s, y - s, s * 2, s * 2);
+  } else if (isBicolor(color)) {
+    // mitad y mitad: un color a la izquierda, el otro a la derecha, con una raya blanca en medio
+    const [a, b] = colorsOf(color);
+    for (const [tone, from] of [[a, -s], [b, 0]]) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x + from, y - s, s, s * 2);
+      ctx.clip();
+      ctx.drawImage(sprites[tone], x - s, y - s, s * 2, s * 2);
+      ctx.restore();
+    }
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+    ctx.lineWidth = 1.5 * scale;
+    ctx.beginPath();
+    ctx.moveTo(x, y - (R - BUBBLE_GAP) * scale);
+    ctx.lineTo(x, y + (R - BUBBLE_GAP) * scale);
+    ctx.stroke();
+  } else {
+    ctx.drawImage(sprites[color], x - s, y - s, s * 2, s * 2);
+  }
   ctx.globalAlpha = 1;
 }
 
@@ -554,9 +647,10 @@ canvas.height = H * DPR;
 ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
 
 const ui = {
-  score: document.getElementById('score'),
-  level: document.getElementById('level'),
-  shots: document.getElementById('shots'),
+  tank: document.getElementById('tank'),
+  tankWater: document.getElementById('tank-water'),
+  swimmer: document.getElementById('tank-swimmer'),
+  left: document.getElementById('left'),
   mute: document.getElementById('mute'),
   maps: document.getElementById('maps'),
   // un botón por bola especial, en la fila de iconos bajo el lanzador
@@ -606,11 +700,17 @@ const state = {
 
 const rand = (n) => Math.floor(Math.random() * n);
 
-/** Nueva bola: un color del tablero, sin repetir sin sentido (ver colorsToAvoid). */
+/**
+ * Nueva bola: un color del tablero, sin repetir sin sentido (ver
+ * colorsToAvoid) y casi siempre de los que pueden explotar algo desde el
+ * lanzador, con el mapa donde va a quedar la cámara (ver reachableColors).
+ */
 function pickColor(queue = []) {
   const onBoard = colorsOnBoard(state.grid);
   if (!onBoard.length) return rand(COLORS.length);
-  return chooseColor(onBoard, colorsToAvoid(state.history, queue));
+  const cam = nextCamera(state.pendingCam ?? state.camTarget, state.grid, R, FRONT_Y, BLOCK_PX);
+  const useful = reachableColors(state.grid, { x: SHOOTER.x, y: SHOOTER.y + cam }, R, W, { minAngle: MIN_ANGLE });
+  return chooseColor(onBoard, colorsToAvoid(state.history, queue), Math.random, useful);
 }
 
 /**
@@ -636,15 +736,13 @@ function ensureColorsValid() {
 function startLevel(index) {
   state.levelIndex = index;
   state.grid = parseMap(LEVELS[index].map);
+  state.startBubbles = bubblesLeft(state.grid);
   state.gridVersion = (state.gridVersion || 0) + 1;
   state.score = 0;
   state.shots = 0;
   state.effects = [];
   state.history = [];
   state.streak = 0;
-  state.current = pickColor();
-  state.next = pickColor([state.current]);
-  stopRocketSound();
   state.projectile = null;
   state.aimCache = null;
   state.armed = null; // las guardadas se conservan: pasan de un mapa a otro
@@ -660,6 +758,9 @@ function startLevel(index) {
   state.camTarget = play;
   state.camStart = play;
   state.cam = 0;
+  // las primeras bolas, ya con la cámara de juego (ver pickColor)
+  state.current = pickColor();
+  state.next = pickColor([state.current]);
   state.intro = { t: 0, from: 0, to: play, duration: Math.min(5, Math.max(1.8, play / 320)) };
   state.mode = play > 0 ? 'intro' : 'playing';
   if (play > 0) {
@@ -679,12 +780,30 @@ function finishIntro() {
 
 const shotsLeft = () => LEVELS[state.levelIndex].shots - state.shots;
 
+/**
+ * La pecera de arriba: el animal de la temática nada hacia la bandera según
+ * las burbujas rotas, y a la derecha se ven las que quedan.
+ */
 function updateHud() {
-  ui.score.textContent = state.score;
-  ui.level.textContent = `${LEVELS[state.levelIndex].number}/${LEVELS_PER_THEME}`;
-  const left = shotsLeft();
-  ui.shots.textContent = left;
-  ui.shots.classList.toggle('warn', left <= 5);
+  const left = state.grid ? bubblesLeft(state.grid) : 0;
+  const total = state.startBubbles || left || 1;
+  const done = Math.min(1, Math.max(0, 1 - left / total));
+  const key = THEMES[themeOf(state.levelIndex)].key;
+  if (ui.swimmer.dataset.key !== key) {
+    ui.swimmer.dataset.key = key;
+    ui.swimmer.innerHTML = animalSvg(key, THEMES[themeOf(state.levelIndex)].name);
+    ui.swimmer.className = `tank-swimmer face-${THEME_ART[key].facing}`;
+  }
+  // el agua llena el tubo y el animal va por delante, hasta la bandera
+  ui.tankWater.style.width = `calc(${done} * (100% - 6px))`;
+  ui.swimmer.style.left = `min(calc(100% - 62px), max(4px, calc(${done} * (100% - 6px) - 34px)))`;
+  ui.tank.setAttribute('aria-valuenow', String(Math.round(done * 100)));
+  if (ui.left.textContent !== String(left)) {
+    ui.left.textContent = left;
+    ui.left.classList.remove('bump');
+    void ui.left.offsetWidth; // reinicia la animación
+    ui.left.classList.add('bump');
+  }
   updateSpecials();
   ui.mute.textContent = sfx.muted ? '🔇' : '🔊';
   ui.mute.setAttribute('aria-label', sfx.muted ? 'Activar sonido' : 'Silenciar');
@@ -726,10 +845,6 @@ function award(kind, i = 0) {
   state.effects.push({ type: 'text', x: W / 2, y: state.cam + H * (0.6 + 0.07 * i), text: AWARD_TEXT[kind], t: 0, life: 1.2, big: true });
   updateSpecials(kind);
   sfx.gain();
-}
-
-function stopRocketSound() {
-  state.projectile?.stopSound?.();
 }
 
 function addScore(n) {
@@ -802,19 +917,18 @@ function showScreen(html, background) {
 
 /** Temática que toca: la primera sin completar que esté abierta. */
 function currentTheme() {
-  const t = THEMES.findIndex((_, i) => themeProgress(state.progress, i).next != null);
+  const t = THEMES.findIndex((_, i) => progressOf(i).next != null);
   return t === -1 ? THEMES.length - 1 : t;
 }
 
 /** Lista de las temáticas. */
 function showMenu() {
   state.mode = 'menu';
-  stopRocketSound();
   state.projectile = null;
   const cur = currentTheme();
-  const total = THEMES.reduce((n, _, t) => n + themeProgress(state.progress, t).stars, 0);
+  const total = THEMES.reduce((n, _, t) => n + progressOf(t).stars, 0);
   const cards = THEMES.map((theme, t) => {
-    const tp = themeProgress(state.progress, t);
+    const tp = progressOf(t);
     const done = tp.best.filter(Boolean).length;
     const state_ = !tp.unlocked ? 'locked' : tp.completed ? 'done' : 'open';
     const label = `${theme.name}: ${!tp.unlocked ? 'bloqueada' : `${done} de ${LEVELS_PER_THEME} niveles, ${tp.stars} estrellas`}`;
@@ -848,10 +962,9 @@ const PATH = Array.from({ length: LEVELS_PER_THEME }, (_, i) => ({
 /** Camino de niveles de una temática. */
 function showTheme(t) {
   state.mode = 'menu';
-  stopRocketSound();
   state.projectile = null;
   const theme = THEMES[t];
-  const tp = themeProgress(state.progress, t);
+  const tp = progressOf(t);
   const first = t * LEVELS_PER_THEME;
   const reached = tp.completed ? LEVELS_PER_THEME : tp.next == null ? 0 : tp.next + 1;
   const pts = (n) => PATH.slice(0, n).map((p) => `${p.x},${p.y}`).join(' ');
@@ -859,7 +972,7 @@ function showTheme(t) {
     const level = LEVELS[first + i];
     const isDone = tp.best[i] > 0;
     const isNext = tp.next === i;
-    const locked = !isDone && !isNext;
+    const locked = !tp.open[i];
     const boss = i === LEVELS_PER_THEME - 1;
     const cls = ['node', isDone && 'done', isNext && 'next', locked && 'locked', boss && 'boss'].filter(Boolean).join(' ');
     const label = `Nivel ${i + 1}: ${level.name}, ${locked ? 'bloqueado' : isDone ? `${tp.best[i]} de 3 estrellas` : 'siguiente'}`;
@@ -877,6 +990,8 @@ function showTheme(t) {
   } else if (tp.next != null) {
     const level = LEVELS[first + tp.next];
     foot = `<button type="button" class="btn" data-action="level" data-arg="${first + tp.next}">Jugar nivel ${tp.next + 1} · ${esc(level.name)}</button>`;
+  } else if (DEV) {
+    foot = `<div class="locked-foot">En desarrollo: todos los niveles abiertos</div>`;
   } else {
     foot = `<div class="locked-foot">${LOCK} Completa ${esc(THEMES[t - 1].name)} para desbloquearla</div>`;
   }
@@ -1026,17 +1141,18 @@ function shootRocket() {
     y: shot.points[0].y,
     trail: [],
     result: res,
-    stopSound: sfx.rocket(),
   };
+  sfx.rocket();
+  flash(0.25, '255,220,160');
+  state.shake = Math.max(state.shake, 0.25);
+  burst(SHOOTER.x, SHOOTER.y + state.cam, SMOKE_TONE, { n: 26, speed: 220, size: 6, life: 0.8, gravity: -80 });
   // El cohete es un premio: no gasta aire ni cambia las perlas que esperan.
   state.mode = 'flying';
   updateHud();
-  sfx.shoot();
 }
 
 /** El cohete ha salido de la pantalla: puntúa y sigue la partida. */
 function finishRocket(p) {
-  p.stopSound?.();
   state.projectile = null;
   const { popped, dropped } = p.result;
   if (popped.length) state.streak++; // cuenta para la racha como cualquier disparo que explota algo
@@ -1159,6 +1275,8 @@ function land(p) {
   if (p.special === MINE) {
     res = placeMine(state.grid, row, col, { visible: inView() });
     state.effects.push({ type: 'blast', x: at.x, y: at.y, t: 0, life: 0.45 });
+    burst(at.x, at.y, { base: '#ff8c3a', light: '#ffe08a' }, { n: 34, speed: 420, size: 4, life: 0.7 });
+    flash(0.35, '255,200,140');
     state.shake = Math.max(state.shake, 0.22);
     sfx.boom();
   } else if (p.special === RAINBOW) {
@@ -1171,6 +1289,11 @@ function land(p) {
   state.gridVersion = (state.gridVersion || 0) + 1;
   state.projectile = null;
   anchorBeams(res.anchors ?? []);
+  // las de dos golpes que se destapan: la concha salta y se ve su color
+  (res.uncovered ?? []).forEach(({ row: r, col: c, color }, i) => {
+    const { x, y } = cellCenter(state.grid, r, c, R);
+    state.effects.push({ type: 'pop', x, y, color: shellValue(color), t: -i * 0.04, life: 0.3 });
+  });
 
   if (res.popped.length) {
     state.streak++;
@@ -1207,8 +1330,10 @@ function land(p) {
     const gained = popPts + dropPts;
     addScore(gained);
     state.effects.push({ type: 'text', x: at.x, y: at.y, text: `+${gained}`, t: 0, life: 0.9, big: res.dropped.length > 0 });
+    if (res.popped.length + res.dropped.length >= 8) state.shake = Math.max(state.shake, 0.18);
     if (res.dropped.length >= 4) {
       state.effects.push({ type: 'text', x: W / 2, y: state.cam + H * 0.45, text: '¡Avalancha!', t: 0, life: 1.1, big: true });
+      flash(0.22);
       sfx.avalanche();
     } else if (state.streak >= 3) {
       state.effects.push({ type: 'text', x: W / 2, y: state.cam + H * 0.5, text: `¡Racha ×${state.streak}!`, t: 0, life: 0.9, big: true });
@@ -1240,6 +1365,8 @@ function settle() {
     store.set(PROGRESS_KEY, state.progress);
     state.mode = 'cleared';
     sfx.win();
+    confetti();
+    flash(0.35, '255,240,200', 0.6);
     const isLast = index === LEVELS.length - 1;
     const t = themeOf(index);
     const endsTheme = LEVELS[index].number === LEVELS_PER_THEME;
@@ -1335,22 +1462,63 @@ function updateCamera(dt) {
   if (state.mode === 'scrolling' && state.cam === state.camTarget) state.mode = 'playing';
 }
 
-// Motor de fondo mientras el cohete está cargado; sube con sus ganas de despegar.
-let engine = null;
-function updateEngine() {
-  const want = state.armed === ROCKET && ['playing', 'flying', 'scrolling'].includes(state.mode) && !sfx.muted;
-  if (want && !engine) engine = sfx.engine();
-  if (!want && engine) {
-    engine.stop();
-    engine = null;
+// ── Partículas ───────────────────────────────────────────────────────────
+// Chispas que salen de cada burbuja que explota, la llama del cohete y el
+// confeti de la victoria. Viven en state.effects como los demás efectos.
+
+const MAX_SPARKS = 500; // tope para que un cohete o una avalancha no ralenticen el juego
+const countSparks = () => state.effects.reduce((n, e) => n + (e.type === 'spark' || e.type === 'confetti' ? 1 : 0), 0);
+
+/** Chispas en todas direcciones desde (x, y), del tono `tone` y algunas blancas. */
+function burst(x, y, tone, { n = 9, speed = 260, size = 3.2, life = 0.55, gravity = 700, delay = 0 } = {}) {
+  const room = MAX_SPARKS - countSparks();
+  for (let i = 0; i < Math.min(n, room); i++) {
+    const a = Math.random() * Math.PI * 2;
+    const v = speed * (0.35 + Math.random() * 0.75);
+    state.effects.push({
+      type: 'spark',
+      x,
+      y,
+      vx: Math.cos(a) * v,
+      vy: Math.sin(a) * v - speed * 0.25,
+      color: i % 4 === 3 ? '#ffffff' : i % 2 ? tone.light : tone.base,
+      size: size * (0.6 + Math.random() * 0.7),
+      gravity,
+      t: -delay,
+      life: life * (0.7 + Math.random() * 0.6),
+    });
   }
-  engine?.set(Math.max(0.6 * rumbleAt(state.time), hopAt(state.time)));
+}
+
+/** Destello de toda la pantalla (`strength` de 0 a 1). */
+function flash(strength = 0.3, color = '255,255,255', life = 0.35) {
+  state.effects.push({ type: 'flash', strength, color, t: 0, life });
+}
+
+/** Confeti que cae desde arriba de la pantalla, de los colores de las perlas. */
+function confetti(n = 140) {
+  for (let i = 0; i < n; i++) {
+    const tone = COLORS[i % COLORS.length];
+    state.effects.push({
+      type: 'confetti',
+      x: Math.random() * W,
+      y: state.cam - 10 - Math.random() * H * 0.25,
+      vx: (Math.random() - 0.5) * 120,
+      vy: 200 + Math.random() * 180,
+      rot: Math.random() * Math.PI,
+      vr: (Math.random() - 0.5) * 12,
+      w: 6 + Math.random() * 5,
+      h: 3 + Math.random() * 3,
+      color: i % 3 ? tone.base : tone.light,
+      t: -Math.random() * 0.6,
+      life: 3.2,
+    });
+  }
 }
 
 function update(dt) {
   state.time += dt;
   updateCameo(dt);
-  updateEngine();
   state.shake = Math.max(0, state.shake - dt);
   const hoverTo = state.hover ? 1 : 0;
   state.hoverK += Math.sign(hoverTo - state.hoverK) * Math.min(Math.abs(hoverTo - state.hoverK), HOVER_SPEED * dt);
@@ -1362,13 +1530,47 @@ function update(dt) {
     if (p.rocket) {
       p.trail.unshift({ x: p.x, y: p.y });
       if (p.trail.length > 16) p.trail.pop();
-      if (Math.random() < dt * 14) sfx.blub();
+      // llama: chispas naranjas y amarillas que salen hacia atrás
+      const back = p.angle + Math.PI;
+      for (let i = 0; i < 3 && countSparks() < MAX_SPARKS; i++) {
+        const a = -back + (Math.random() - 0.5) * 0.7;
+        const v = 120 + Math.random() * 180;
+        state.effects.push({
+          type: 'spark',
+          x: p.x - Math.cos(p.angle) * R,
+          y: p.y + Math.sin(p.angle) * R,
+          vx: Math.cos(a) * v,
+          vy: Math.sin(a) * v,
+          color: ['#fff3b0', '#ffc44d', '#ff7417'][i % 3],
+          size: 2.5 + Math.random() * 3,
+          gravity: -60,
+          t: 0,
+          life: 0.25 + Math.random() * 0.25,
+        });
+      }
       if (advanceProjectile(p, ROCKET_SPEED * dt)) finishRocket(p);
     } else if (advanceProjectile(p, SPEED * dt)) land(p);
   }
 
   for (const e of state.effects) {
     e.t += dt;
+    // cada burbuja que explota suelta sus chispas al llegarle el turno
+    if (e.type === 'pop' && e.t >= 0 && !e.burst) {
+      e.burst = true;
+      burst(e.x, e.y, toneOf(e.color));
+    }
+    if (e.type === 'spark' && e.t > 0) {
+      e.vx *= 1 - 1.5 * dt;
+      e.vy += e.gravity * dt;
+      e.x += e.vx * dt;
+      e.y += e.vy * dt;
+    }
+    if (e.type === 'confetti' && e.t > 0) {
+      e.vx += Math.sin(state.time * 3 + e.rot) * 40 * dt; // se mece al caer
+      e.x += e.vx * dt;
+      e.y += e.vy * dt;
+      e.rot += e.vr * dt;
+    }
     if (e.type === 'fall' && e.t > 0) {
       e.trail.unshift({ x: e.x, y: e.y });
       if (e.trail.length > 7) e.trail.pop();
@@ -2393,6 +2595,27 @@ function drawEffects() {
       ctx.beginPath();
       ctx.arc(e.x, e.y, R * (1 + k * 4.5), 0, Math.PI * 2);
       ctx.stroke();
+    } else if (e.type === 'spark') {
+      if (e.t < 0) continue;
+      const k = e.t / e.life;
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 1 - k;
+      ctx.fillStyle = e.color;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, e.size * (1 - 0.6 * k), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    } else if (e.type === 'confetti') {
+      if (e.t < 0) continue;
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, (e.life - e.t) * 2);
+      ctx.translate(e.x, e.y);
+      ctx.rotate(e.rot);
+      ctx.scale(1, Math.cos(e.rot * 1.7)); // gira sobre sí mismo
+      ctx.fillStyle = e.color;
+      ctx.fillRect(-e.w / 2, -e.h / 2, e.w, e.h);
+      ctx.restore();
     } else if (e.type === 'text') {
       const k = e.t / e.life;
       ctx.globalAlpha = 1 - k * k;
@@ -2402,8 +2625,14 @@ function drawEffects() {
       ctx.font = `700 ${e.big ? 30 : 20}px "Baloo 2", system-ui, sans-serif`;
       ctx.textAlign = 'center';
       const y = e.y - k * 40;
-      ctx.strokeText(e.text, e.x, y);
-      ctx.fillText(e.text, e.x, y);
+      // entra grande y se asienta, como un sello
+      const pop = k < 0.12 ? 0.5 + (k / 0.12) * 0.75 : 1.25 - Math.min(1, (k - 0.12) / 0.12) * 0.25;
+      ctx.save();
+      ctx.translate(e.x, y);
+      ctx.scale(pop, pop);
+      ctx.strokeText(e.text, 0, 0);
+      ctx.fillText(e.text, 0, 0);
+      ctx.restore();
       ctx.globalAlpha = 1;
     }
   }
@@ -2427,6 +2656,13 @@ function render() {
   else if (state.projectile?.special) drawSpecialBall(state.projectile.special, state.projectile.x, state.projectile.y);
   else if (state.projectile) drawBubble(ctx, state.projectile.x, state.projectile.y, state.projectile.color);
   ctx.restore();
+
+  // Destellos de toda la pantalla.
+  for (const e of state.effects) {
+    if (e.type !== 'flash') continue;
+    ctx.fillStyle = `rgba(${e.color},${e.strength * (1 - e.t / e.life)})`;
+    ctx.fillRect(0, 0, W, H);
+  }
 
   // Capa fija de la pantalla.
   drawCameoHello();

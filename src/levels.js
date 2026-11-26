@@ -2,10 +2,12 @@
 //
 // Cada mapa es una lista de filas de 10 caracteres (la fila 0 es el techo):
 //   r rojo · o naranja · y amarillo · g verde · b azul · p morado · . hueco
+//   v ancla · R O Y G B P de dos golpes (tapada, de ese color) · a c d e f h i
+//   j k l m n q s t bicolores (ver BICOLOR_KEYS)
 // La 2.ª, 4.ª, 6.ª… fila se dibujan desplazadas media burbuja a la
 // derecha; por eso suelen dejar libre la última columna, para quedar centradas.
 
-import { createGrid, anchorValue } from './logic.js';
+import { createGrid, anchorValue, bicolorValue, shellValue } from './logic.js';
 import { GENERATED_MAPS } from './maps.js';
 
 export const BOARD = {
@@ -28,6 +30,16 @@ BOARD.shooterX = BOARD.width / 2;
 BOARD.blockPx = BOARD.blockRows * BOARD.R * Math.sqrt(3);
 
 export const COLOR_KEYS = 'roygbp';
+/** Letras de las burbujas de dos golpes: la de su color, en mayúscula. */
+export const SHELL_KEYS = COLOR_KEYS.toUpperCase();
+/**
+ * Letras de las bicolores, una por pareja de colores, por orden: rojo-naranja,
+ * rojo-amarillo, rojo-verde, rojo-azul, rojo-morado, naranja-amarillo… azul-morado.
+ */
+export const BICOLOR_KEYS = 'acdefhijklmnqst';
+export const BICOLOR_PAIRS = COLOR_KEYS.split('').flatMap((_, a) =>
+  COLOR_KEYS.split('').slice(a + 1).map((__, i) => [a, a + 1 + i]),
+);
 /** Letra de un ancla en los mapas: al tocarla rompe lo que hay hacia donde apunta su flecha. */
 export const ANCHOR_KEY = 'v';
 
@@ -48,16 +60,13 @@ export function addAnchors(map, { start = 5, every = 10 } = {}) {
   return out;
 }
 
-// Mapas del arrecife (la temática del pulpo), hechos con formas y repartidos
-// para que casi ningún color forme grupos de más de 2 (`maxGroup`, 3 en los
-// más suaves): cada explosión hay que prepararla. `shots` es el límite de
-// disparos, ajustado con el bot de tools/bot.js. Las demás temáticas salen de
-// tools/generate-maps.js (src/maps.js).
+// Formas de los mapas del arrecife (la temática del pulpo), hechas a mano.
+// Aquí solo cuenta qué casillas tienen burbuja: tools/generate-maps.js las
+// vuelve a pintar con los colores que tocan a cada nivel, les pone el límite de
+// disparos con el bot y las guarda en src/maps.js, como las demás temáticas.
 const REEF_MAPS = [
   {
     name: 'Torres',
-    maxGroup: 3, // más suave: algunos grupos de 3
-    shots: 50,
     map: [
       'gggryyrggg',
       'yyrryrryy.',
@@ -93,7 +102,6 @@ const REEF_MAPS = [
   },
   {
     name: 'Rombos',
-    shots: 80,
     map: [
       'bpprbbrppb',
       'oryogoyro.',
@@ -147,8 +155,6 @@ const REEF_MAPS = [
   },
   {
     name: 'Muralla',
-    maxGroup: 3, // más suave: algunos grupos de 3
-    shots: 55,
     map: [
       'rrrybbyrrr',
       'ggygbgygg.',
@@ -182,7 +188,6 @@ const REEF_MAPS = [
   },
   {
     name: 'Embudo',
-    shots: 50,
     map: [
       'ybbgrrgbby',
       'ygygpgygy.',
@@ -228,7 +233,6 @@ const REEF_MAPS = [
   },
   {
     name: 'Zigzag',
-    shots: 90,
     map: [
       'orbryyrbro',
       'rorgrgror.',
@@ -284,7 +288,6 @@ const REEF_MAPS = [
   },
   {
     name: 'Panal',
-    shots: 80,
     map: [
       'bggybbyggb',
       'rrbygybrr.',
@@ -330,7 +333,6 @@ const REEF_MAPS = [
   },
   {
     name: 'Raíces',
-    shots: 95,
     map: [
       'oogyooygoo',
       'ygybgbygy.',
@@ -386,7 +388,6 @@ const REEF_MAPS = [
   },
   {
     name: 'Cuevas',
-    shots: 100,
     map: [
       'byrbppbryb',
       'ygororogy.',
@@ -446,7 +447,6 @@ const REEF_MAPS = [
   },
   {
     name: 'Fortaleza',
-    shots: 175,
     map: [
       'oopyooypoo',
       'rgrgbgrgr.',
@@ -506,7 +506,6 @@ const REEF_MAPS = [
   },
   {
     name: 'Colmena',
-    shots: 165,
     map: [
       'oogyrrygoo',
       'proyoyorp.',
@@ -569,9 +568,11 @@ const REEF_MAPS = [
 
 export const LEVELS_PER_THEME = 10;
 
-// Orden de los mapas del arrecife, de menos a más disparos que necesita el bot.
+// Orden de las formas del arrecife, de las más sencillas a las más difíciles.
 const REEF_ORDER = ['Torres', 'Embudo', 'Muralla', 'Rombos', 'Zigzag', 'Panal', 'Raíces', 'Cuevas', 'Colmena', 'Fortaleza'];
 const reef = Object.fromEntries(REEF_MAPS.map((level) => [level.name, level]));
+/** Formas del Pulpo, en el orden de sus niveles (las usa tools/generate-maps.js). */
+export const REEF_SHAPES = REEF_ORDER.map((name) => reef[name].map);
 
 /** `accent` colorea la interfaz de la temática; su escena de fondo está en game.js (SCENES). */
 export const THEMES = [
@@ -589,8 +590,7 @@ export const THEMES = [
     zone: 'Arrecife de coral · 10–30 m',
     accent: '#ff9e85',
     names: ['Coral', 'Cueva', 'Tinta', 'Ventosas', 'Camuflaje', 'Laberinto', 'Rocas', 'Anémonas', 'Ocho brazos', 'Gran pulpo'],
-    // los dos primeros sin anclas, para ir poco a poco; a partir del tercero, con
-    maps: REEF_ORDER.map((name, i) => (i < 2 ? reef[name] : { ...reef[name], map: addAnchors(reef[name].map) })),
+    maps: GENERATED_MAPS.pulpo,
   },
   {
     key: 'caballito',
@@ -629,16 +629,32 @@ export function themeOf(index) {
 }
 
 /**
- * Cómo va una temática: si está abierta, si está completada, sus estrellas y
- * el nivel que toca (índice dentro de la temática, o null si ya está acabada).
+ * Cómo va una temática: si está abierta, si está completada, sus estrellas,
+ * el nivel que toca (índice dentro de la temática, o null si ya está acabada)
+ * y en qué niveles se puede entrar (`open`: los ganados y el que toca). Con
+ * `allOpen` (en desarrollo, ver isDevHost) todo está abierto, sin tocar el
+ * progreso guardado.
  */
-export function themeProgress(progress, t) {
+export function themeProgress(progress, t, { allOpen = false } = {}) {
   const first = t * LEVELS_PER_THEME;
   const best = Array.from({ length: LEVELS_PER_THEME }, (_, i) => progress.stars[first + i] ?? 0);
   const completed = best[LEVELS_PER_THEME - 1] > 0;
-  const unlocked = progress.unlocked > first;
-  const next = !unlocked || completed ? null : Math.min(progress.unlocked - 1 - first, LEVELS_PER_THEME - 1);
-  return { unlocked, completed, best, stars: best.reduce((a, b) => a + b, 0), next };
+  const reached = progress.unlocked > first;
+  const next = !reached || completed ? null : Math.min(progress.unlocked - 1 - first, LEVELS_PER_THEME - 1);
+  const open = best.map((stars, i) => allOpen || stars > 0 || next === i);
+  return { unlocked: allOpen || reached, completed, best, stars: best.reduce((a, b) => a + b, 0), next, open };
+}
+
+/**
+ * Si el juego se está probando en desarrollo: en el ordenador (localhost) o
+ * desde otro aparato de la red de casa (192.168.x.x, 10.x.x.x, 172.16–31.x.x,
+ * nombre.local). Lo publicado no lo es.
+ */
+export function isDevHost(hostname) {
+  if (['localhost', '127.0.0.1', '[::1]', '::1'].includes(hostname) || hostname.endsWith('.local')) return true;
+  const ip = hostname.split('.').map(Number);
+  if (ip.length !== 4 || ip.some((n) => !Number.isInteger(n))) return false;
+  return ip[0] === 10 || (ip[0] === 192 && ip[1] === 168) || (ip[0] === 172 && ip[1] >= 16 && ip[1] <= 31);
 }
 
 export function parseMap(map, cols = BOARD.cols, rows = map.length + BOARD.extraRows) {
@@ -650,6 +666,14 @@ export function parseMap(map, cols = BOARD.cols, rows = map.length + BOARD.extra
       if (ch === ANCHOR_KEY) {
         // cada ancla empieza apuntando a un sitio distinto según dónde esté
         grid.cells[r][c] = anchorValue(r + c);
+        return;
+      }
+      if (SHELL_KEYS.includes(ch)) {
+        grid.cells[r][c] = shellValue(SHELL_KEYS.indexOf(ch));
+        return;
+      }
+      if (BICOLOR_KEYS.includes(ch)) {
+        grid.cells[r][c] = bicolorValue(...BICOLOR_PAIRS[BICOLOR_KEYS.indexOf(ch)]);
         return;
       }
       const color = COLOR_KEYS.indexOf(ch);
