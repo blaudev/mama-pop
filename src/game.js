@@ -8,6 +8,7 @@ import {
   matchPreview,
   colorsToAvoid,
   chooseColor,
+  reachableColors,
   bottomY,
   initialCamera,
   nextCamera,
@@ -606,11 +607,17 @@ const state = {
 
 const rand = (n) => Math.floor(Math.random() * n);
 
-/** Nueva bola: un color del tablero, sin repetir sin sentido (ver colorsToAvoid). */
+/**
+ * Nueva bola: un color del tablero, sin repetir sin sentido (ver
+ * colorsToAvoid) y casi siempre de los que pueden explotar algo desde el
+ * lanzador, con el mapa donde va a quedar la cámara (ver reachableColors).
+ */
 function pickColor(queue = []) {
   const onBoard = colorsOnBoard(state.grid);
   if (!onBoard.length) return rand(COLORS.length);
-  return chooseColor(onBoard, colorsToAvoid(state.history, queue));
+  const cam = nextCamera(state.pendingCam ?? state.camTarget, state.grid, R, FRONT_Y, BLOCK_PX);
+  const useful = reachableColors(state.grid, { x: SHOOTER.x, y: SHOOTER.y + cam }, R, W, { minAngle: MIN_ANGLE });
+  return chooseColor(onBoard, colorsToAvoid(state.history, queue), Math.random, useful);
 }
 
 /**
@@ -642,8 +649,6 @@ function startLevel(index) {
   state.effects = [];
   state.history = [];
   state.streak = 0;
-  state.current = pickColor();
-  state.next = pickColor([state.current]);
   stopRocketSound();
   state.projectile = null;
   state.aimCache = null;
@@ -660,6 +665,9 @@ function startLevel(index) {
   state.camTarget = play;
   state.camStart = play;
   state.cam = 0;
+  // las primeras bolas, ya con la cámara de juego (ver pickColor)
+  state.current = pickColor();
+  state.next = pickColor([state.current]);
   state.intro = { t: 0, from: 0, to: play, duration: Math.min(5, Math.max(1.8, play / 320)) };
   state.mode = play > 0 ? 'intro' : 'playing';
   if (play > 0) {

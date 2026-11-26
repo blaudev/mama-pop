@@ -19,6 +19,7 @@ import {
   matchPreview,
   colorsToAvoid,
   chooseColor,
+  reachableColors,
   earnsRocket,
   rocketPath,
   fireRocket,
@@ -283,6 +284,38 @@ test('colorsToAvoid: tras fallar dos seguidas del mismo color, ese color no sale
   assert.deepEqual(colorsToAvoid([hit(2), miss(2)]), [], 'una de las dos explotó');
   assert.deepEqual(colorsToAvoid([miss(1), miss(2)]), [], 'colores distintos');
   assert.deepEqual(colorsToAvoid([miss(2)]), []);
+});
+
+test('reachableColors: un color cuya pareja se alcanza desde el lanzador sirve', () => {
+  const g = createGrid(5, 10);
+  g.cells[0][2] = 1;
+  g.cells[0][3] = 1;
+  g.cells[0][0] = 2; // sola: un disparo de este color no explota nada
+  const width = 5 * 2 * R + R;
+  const start = { x: width / 2, y: 300 };
+  assert.deepEqual(reachableColors(g, start, R, width), [1]);
+});
+
+test('reachableColors: no cuenta un color que solo explotaría detrás de una pared de otros', () => {
+  // Fila 0: verdes (3) detrás; fila 1: pared de rojos (1) y amarillos (2)
+  // alternos, sin parejas. La esquina de la fila 0 es amarilla para que no
+  // quede ningún hueco por el que llegar a los verdes.
+  const g = createGrid(10, 14);
+  for (let c = 0; c < 9; c++) g.cells[0][c] = 3;
+  g.cells[0][9] = 2;
+  for (let c = 0; c < 9; c++) g.cells[1][c] = c % 2 ? 2 : 1;
+  const width = 10 * 2 * R + R;
+  const start = { x: width / 2, y: 500 };
+  assert.deepEqual(reachableColors(g, start, R, width), []);
+});
+
+test('chooseColor prefiere los colores que sirven, pero los demás también salen', () => {
+  // con el primer número bajo se elige entre los que sirven; si no, entre todos
+  const seq = (...xs) => () => xs.shift();
+  assert.equal(chooseColor([1, 2, 3], [], seq(0.1, 0.0), [3]), 3);
+  assert.equal(chooseColor([1, 2, 3], [], seq(0.1, 0.99), [3]), 3);
+  assert.equal(chooseColor([1, 2, 3], [], seq(0.9, 0.0), [3]), 1, 'a veces sale uno que no sirve');
+  assert.equal(chooseColor([1, 2, 3], [3], seq(0.1, 0.0), [3]), 1, 'lo que hay que evitar se sigue evitando');
 });
 
 test('colorsToAvoid: nunca tres bolas seguidas del mismo color en la cola', () => {

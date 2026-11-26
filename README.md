@@ -20,7 +20,10 @@ pausa corta (0,35 s) para evitar dobles toques. Cuando caen bolas, el mapa esper
 pantalla antes de bajar.
 
 **Bolas propuestas:** siempre de un color que quede en el mapa, nunca tres seguidas del mismo color
-y, si fallas dos seguidas del mismo color, la siguiente es de otro.
+y, si fallas dos seguidas del mismo color, la siguiente es de otro. Además, 3 de cada 4 veces sale un color
+que puede explotar algo desde el lanzador: el juego prueba hacia dónde se puede disparar y no cuenta los
+grupos escondidos detrás de burbujas de otros colores (`reachableColors` en `src/logic.js`). El bot de
+`tools/bot.js` elige las bolas igual, así que los límites de disparos ya lo tienen en cuenta.
 
 **Cohete:** cada 3 disparos seguidos explotando algo ganas un cohete, que se guarda en la barra de abajo (el
 número dice cuántos tienes; se guardan y pasan de un mapa a otro). Tócalo (o pulsa R) para cargarlo en el cañón cuando quieras; vuelve a

@@ -18,6 +18,7 @@ import {
   nextCamera,
   colorsToAvoid,
   chooseColor,
+  reachableColors,
   visibleRows,
   rotateAnchors,
 } from '../src/logic.js';
@@ -50,8 +51,13 @@ export function playLevel(level, { seed = 1, angles = 80, maxShots = 2000 } = {}
   const rand = mulberry32(seed);
   // Misma cola de colores que el juego (ver colorsToAvoid).
   let history = [];
-  const pick = (queue = []) => chooseColor(colorsOnBoard(grid), colorsToAvoid(history, queue), rand);
   let cam = initialCamera(grid, R, BOARD.frontY, BOARD.blockPx);
+  // y, como en el juego, casi siempre de un color que pueda explotar algo desde el lanzador
+  const pick = (queue = []) => {
+    const start = { x: BOARD.shooterX, y: BOARD.shooterY + cam };
+    const useful = reachableColors(grid, start, R, BOARD.width, { minAngle: BOARD.minAngle });
+    return chooseColor(colorsOnBoard(grid), colorsToAvoid(history, queue), rand, useful);
+  };
   let current = pick();
   let next = pick([current]);
   let shots = 0;

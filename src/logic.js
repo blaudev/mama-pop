@@ -421,11 +421,39 @@ export function colorsToAvoid(history, queue = []) {
   return [...avoid];
 }
 
-/** Color al azar de los que hay en el tablero, sin los de `avoid` si queda alguno más. */
-export function chooseColor(onBoard, avoid = [], rand = Math.random) {
+/** Probabilidad de que la bola salga de un color que sirve (ver reachableColors), si hay alguno. */
+export const PREFER_USEFUL = 0.75;
+
+/**
+ * Color al azar de los que hay en el tablero, sin los de `avoid` si queda
+ * alguno más. Si hay colores en `useful` (los que pueden explotar algo desde
+ * el lanzador), casi siempre sale uno de ellos; a veces, cualquiera.
+ */
+export function chooseColor(onBoard, avoid = [], rand = Math.random, useful = []) {
   const pool = onBoard.filter((c) => !avoid.includes(c));
   const from = pool.length ? pool : onBoard;
+  const good = from.filter((c) => useful.includes(c));
+  if (good.length && rand() < PREFER_USEFUL) return good[Math.floor(rand() * good.length)];
   return from[Math.floor(rand() * from.length)];
+}
+
+/**
+ * Colores que explotarían algo disparados desde `start`: prueba `angles`
+ * ángulos (los mismos límites que el lanzador) y mira, en cada casilla a la
+ * que se llega, qué colores harían grupo de 3. Así no cuenta los grupos
+ * escondidos detrás de burbujas de otros colores.
+ */
+export function reachableColors(grid, start, R, width, { angles = 60, minAngle = 0.13 } = {}) {
+  const onBoard = colorsOnBoard(grid);
+  const cells = new Map();
+  for (let i = 0; i < angles; i++) {
+    const angle = minAngle + ((Math.PI - 2 * minAngle) * i) / (angles - 1);
+    const { cell } = simulateShot(grid, start, angle, R, width);
+    if (cell) cells.set(`${cell.row},${cell.col}`, cell);
+  }
+  return onBoard.filter((color) =>
+    [...cells.values()].some(({ row, col }) => matchPreview(grid, row, col, color).pops),
+  );
 }
 
 // ── Cohete ───────────────────────────────────────────────────────────────
