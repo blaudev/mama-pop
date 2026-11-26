@@ -102,13 +102,10 @@ test('en cada temática la dificultad sube: los 3 últimos niveles piden más di
   }
 });
 
-test('hay niveles de solo 2 colores: uno en cada temática generada y dos al empezar la Tortuga', () => {
+test('en cada temática los colores suben: 2, 3, 4 y 5 en los cuatro primeros niveles y los 6 del 5.º al 10.º', () => {
   const colorsIn = (level) => colorsOnBoard(parseMap(level.map)).length;
-  const twoColor = LEVELS.filter((level) => colorsIn(level) === 2);
-  assert.ok(twoColor.length >= 5, `solo ${twoColor.length} niveles de 2 colores`);
-  assert.equal(colorsIn(LEVELS[0]), 2, 'el primer nivel es de 2 colores');
-  for (const key of ['caballito', 'medusa', 'ballena']) {
-    assert.ok(twoColor.some((level) => THEMES[level.theme].key === key), `${key} no tiene ningún nivel de 2 colores`);
+  for (const theme of THEMES) {
+    assert.deepEqual(theme.maps.map(colorsIn), [2, 3, 4, 5, 6, 6, 6, 6, 6, 6], theme.name);
   }
 });
 

@@ -75,8 +75,13 @@ gran profundidad con el barco hundido), más oscuro cuanto más profunda. Cada m
 animal de la temática cruza el fondo nadando por detrás de las perlas y a mitad de camino se para a saludar
 (`src/cameo.js`).
 
-Los mapas del Pulpo son los de siempre (en `src/levels.js`). Los de las otras cuatro temáticas los genera
-`tools/generate-maps.js` y los guarda en `src/maps.js` (no se edita a mano):
+En cada temática los colores van subiendo: el nivel 1 tiene 2 colores, el 2 tiene 3, el 3 tiene 4, el 4 tiene 5
+y del 5 al 10 salen los 6 (`COLOR_PLAN` en `tools/generate-maps.js`). A partir del 5.º la dificultad sigue subiendo con
+mapas más largos, grupos más pequeños, anclas y menos disparos de margen.
+
+Todos los mapas los genera `tools/generate-maps.js` y los guarda en `src/maps.js` (no se edita a mano). Los del
+Pulpo conservan las formas hechas a mano de `src/levels.js`; el generador solo las vuelve a pintar con los colores
+que tocan:
 
 ```bash
 node tools/generate-maps.js
@@ -86,7 +91,7 @@ El generador es determinista, comprueba las mismas reglas que los tests y fija e
 
 ## Mapas
 
-Están en `src/levels.js`. Cada fila es un texto de 10 letras (la primera fila es el techo):
+Están en `src/maps.js` (y las formas del Pulpo, en `src/levels.js`). Cada fila es un texto de 10 letras (la primera fila es el techo):
 `r` rojo · `o` naranja · `y` amarillo · `g` verde · `b` azul · `p` morado · `v` ancla · `.` hueco.
 La 2.ª, 4.ª, 6.ª… fila se dibujan desplazadas media burbuja a la derecha y tienen una bola menos
 (la última letra va siempre a `.`), para que los mapas puedan ser simétricos de izquierda a derecha.
@@ -94,8 +99,8 @@ La 2.ª, 4.ª, 6.ª… fila se dibujan desplazadas media burbuja a la derecha y 
 
 Están hechos para ser difíciles: casi ningún color forma grupos de más de 2, así que cada explosión
 hay que prepararla. A cambio, cada mapa tiene **racimos**: grupos que cuelgan de un tallo cuyo color
-forma un grupo de 2 o 3, así que una sola bola bien puesta los suelta enteros. Los tres primeros mapas
-son más suaves (4 colores y algunos grupos de 3). `npm test` comprueba que cada mapa es válido (ancho correcto, simétrico, ninguna
+forma un grupo de 2 o 3, así que una sola bola bien puesta los suelta enteros. Los primeros mapas de cada
+temática son más suaves (menos colores y algunos grupos de 3). `npm test` comprueba que cada mapa es válido (ancho correcto, simétrico, ninguna
 burbuja suelta, grupos pequeños, al menos un racimo) y que el bot de `tools/bot.js` lo gana sin pasarse del límite. Para ver
 cuántos disparos necesita el bot en cada mapa:
 

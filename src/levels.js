@@ -48,16 +48,13 @@ export function addAnchors(map, { start = 5, every = 10 } = {}) {
   return out;
 }
 
-// Mapas del arrecife (la temática del pulpo), hechos con formas y repartidos
-// para que casi ningún color forme grupos de más de 2 (`maxGroup`, 3 en los
-// más suaves): cada explosión hay que prepararla. `shots` es el límite de
-// disparos, ajustado con el bot de tools/bot.js. Las demás temáticas salen de
-// tools/generate-maps.js (src/maps.js).
+// Formas de los mapas del arrecife (la temática del pulpo), hechas a mano.
+// Aquí solo cuenta qué casillas tienen burbuja: tools/generate-maps.js las
+// vuelve a pintar con los colores que tocan a cada nivel, les pone el límite de
+// disparos con el bot y las guarda en src/maps.js, como las demás temáticas.
 const REEF_MAPS = [
   {
     name: 'Torres',
-    maxGroup: 3, // más suave: algunos grupos de 3
-    shots: 50,
     map: [
       'gggryyrggg',
       'yyrryrryy.',
@@ -93,7 +90,6 @@ const REEF_MAPS = [
   },
   {
     name: 'Rombos',
-    shots: 80,
     map: [
       'bpprbbrppb',
       'oryogoyro.',
@@ -147,8 +143,6 @@ const REEF_MAPS = [
   },
   {
     name: 'Muralla',
-    maxGroup: 3, // más suave: algunos grupos de 3
-    shots: 55,
     map: [
       'rrrybbyrrr',
       'ggygbgygg.',
@@ -182,7 +176,6 @@ const REEF_MAPS = [
   },
   {
     name: 'Embudo',
-    shots: 50,
     map: [
       'ybbgrrgbby',
       'ygygpgygy.',
@@ -228,7 +221,6 @@ const REEF_MAPS = [
   },
   {
     name: 'Zigzag',
-    shots: 90,
     map: [
       'orbryyrbro',
       'rorgrgror.',
@@ -284,7 +276,6 @@ const REEF_MAPS = [
   },
   {
     name: 'Panal',
-    shots: 80,
     map: [
       'bggybbyggb',
       'rrbygybrr.',
@@ -330,7 +321,6 @@ const REEF_MAPS = [
   },
   {
     name: 'Raíces',
-    shots: 95,
     map: [
       'oogyooygoo',
       'ygybgbygy.',
@@ -386,7 +376,6 @@ const REEF_MAPS = [
   },
   {
     name: 'Cuevas',
-    shots: 100,
     map: [
       'byrbppbryb',
       'ygororogy.',
@@ -446,7 +435,6 @@ const REEF_MAPS = [
   },
   {
     name: 'Fortaleza',
-    shots: 175,
     map: [
       'oopyooypoo',
       'rgrgbgrgr.',
@@ -506,7 +494,6 @@ const REEF_MAPS = [
   },
   {
     name: 'Colmena',
-    shots: 165,
     map: [
       'oogyrrygoo',
       'proyoyorp.',
@@ -569,9 +556,11 @@ const REEF_MAPS = [
 
 export const LEVELS_PER_THEME = 10;
 
-// Orden de los mapas del arrecife, de menos a más disparos que necesita el bot.
+// Orden de las formas del arrecife, de las más sencillas a las más difíciles.
 const REEF_ORDER = ['Torres', 'Embudo', 'Muralla', 'Rombos', 'Zigzag', 'Panal', 'Raíces', 'Cuevas', 'Colmena', 'Fortaleza'];
 const reef = Object.fromEntries(REEF_MAPS.map((level) => [level.name, level]));
+/** Formas del Pulpo, en el orden de sus niveles (las usa tools/generate-maps.js). */
+export const REEF_SHAPES = REEF_ORDER.map((name) => reef[name].map);
 
 /** `accent` colorea la interfaz de la temática; su escena de fondo está en game.js (SCENES). */
 export const THEMES = [
@@ -589,8 +578,7 @@ export const THEMES = [
     zone: 'Arrecife de coral · 10–30 m',
     accent: '#ff9e85',
     names: ['Coral', 'Cueva', 'Tinta', 'Ventosas', 'Camuflaje', 'Laberinto', 'Rocas', 'Anémonas', 'Ocho brazos', 'Gran pulpo'],
-    // los dos primeros sin anclas, para ir poco a poco; a partir del tercero, con
-    maps: REEF_ORDER.map((name, i) => (i < 2 ? reef[name] : { ...reef[name], map: addAnchors(reef[name].map) })),
+    maps: GENERATED_MAPS.pulpo,
   },
   {
     key: 'caballito',
