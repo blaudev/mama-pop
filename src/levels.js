@@ -2,10 +2,12 @@
 //
 // Cada mapa es una lista de filas de 10 caracteres (la fila 0 es el techo):
 //   r rojo · o naranja · y amarillo · g verde · b azul · p morado · . hueco
+//   v ancla · R O Y G B P de dos golpes (tapada, de ese color) · a c d e f h i
+//   j k l m n q s t bicolores (ver BICOLOR_KEYS)
 // La 2.ª, 4.ª, 6.ª… fila se dibujan desplazadas media burbuja a la
 // derecha; por eso suelen dejar libre la última columna, para quedar centradas.
 
-import { createGrid, anchorValue } from './logic.js';
+import { createGrid, anchorValue, bicolorValue, shellValue } from './logic.js';
 import { GENERATED_MAPS } from './maps.js';
 
 export const BOARD = {
@@ -28,6 +30,16 @@ BOARD.shooterX = BOARD.width / 2;
 BOARD.blockPx = BOARD.blockRows * BOARD.R * Math.sqrt(3);
 
 export const COLOR_KEYS = 'roygbp';
+/** Letras de las burbujas de dos golpes: la de su color, en mayúscula. */
+export const SHELL_KEYS = COLOR_KEYS.toUpperCase();
+/**
+ * Letras de las bicolores, una por pareja de colores, por orden: rojo-naranja,
+ * rojo-amarillo, rojo-verde, rojo-azul, rojo-morado, naranja-amarillo… azul-morado.
+ */
+export const BICOLOR_KEYS = 'acdefhijklmnqst';
+export const BICOLOR_PAIRS = COLOR_KEYS.split('').flatMap((_, a) =>
+  COLOR_KEYS.split('').slice(a + 1).map((__, i) => [a, a + 1 + i]),
+);
 /** Letra de un ancla en los mapas: al tocarla rompe lo que hay hacia donde apunta su flecha. */
 export const ANCHOR_KEY = 'v';
 
@@ -617,16 +629,32 @@ export function themeOf(index) {
 }
 
 /**
- * Cómo va una temática: si está abierta, si está completada, sus estrellas y
- * el nivel que toca (índice dentro de la temática, o null si ya está acabada).
+ * Cómo va una temática: si está abierta, si está completada, sus estrellas,
+ * el nivel que toca (índice dentro de la temática, o null si ya está acabada)
+ * y en qué niveles se puede entrar (`open`: los ganados y el que toca). Con
+ * `allOpen` (en desarrollo, ver isDevHost) todo está abierto, sin tocar el
+ * progreso guardado.
  */
-export function themeProgress(progress, t) {
+export function themeProgress(progress, t, { allOpen = false } = {}) {
   const first = t * LEVELS_PER_THEME;
   const best = Array.from({ length: LEVELS_PER_THEME }, (_, i) => progress.stars[first + i] ?? 0);
   const completed = best[LEVELS_PER_THEME - 1] > 0;
-  const unlocked = progress.unlocked > first;
-  const next = !unlocked || completed ? null : Math.min(progress.unlocked - 1 - first, LEVELS_PER_THEME - 1);
-  return { unlocked, completed, best, stars: best.reduce((a, b) => a + b, 0), next };
+  const reached = progress.unlocked > first;
+  const next = !reached || completed ? null : Math.min(progress.unlocked - 1 - first, LEVELS_PER_THEME - 1);
+  const open = best.map((stars, i) => allOpen || stars > 0 || next === i);
+  return { unlocked: allOpen || reached, completed, best, stars: best.reduce((a, b) => a + b, 0), next, open };
+}
+
+/**
+ * Si el juego se está probando en desarrollo: en el ordenador (localhost) o
+ * desde otro aparato de la red de casa (192.168.x.x, 10.x.x.x, 172.16–31.x.x,
+ * nombre.local). Lo publicado no lo es.
+ */
+export function isDevHost(hostname) {
+  if (['localhost', '127.0.0.1', '[::1]', '::1'].includes(hostname) || hostname.endsWith('.local')) return true;
+  const ip = hostname.split('.').map(Number);
+  if (ip.length !== 4 || ip.some((n) => !Number.isInteger(n))) return false;
+  return ip[0] === 10 || (ip[0] === 192 && ip[1] === 168) || (ip[0] === 172 && ip[1] >= 16 && ip[1] <= 31);
 }
 
 export function parseMap(map, cols = BOARD.cols, rows = map.length + BOARD.extraRows) {
@@ -638,6 +666,14 @@ export function parseMap(map, cols = BOARD.cols, rows = map.length + BOARD.extra
       if (ch === ANCHOR_KEY) {
         // cada ancla empieza apuntando a un sitio distinto según dónde esté
         grid.cells[r][c] = anchorValue(r + c);
+        return;
+      }
+      if (SHELL_KEYS.includes(ch)) {
+        grid.cells[r][c] = shellValue(SHELL_KEYS.indexOf(ch));
+        return;
+      }
+      if (BICOLOR_KEYS.includes(ch)) {
+        grid.cells[r][c] = bicolorValue(...BICOLOR_PAIRS[BICOLOR_KEYS.indexOf(ch)]);
         return;
       }
       const color = COLOR_KEYS.indexOf(ch);

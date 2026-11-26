@@ -37,6 +37,15 @@ parte del mapa que se ve. Si rompe otra ancla, esa salta también hacia donde ap
 disparo, todas las flechas giran un paso en el sentido del reloj. El cohete y la mina también las hacen saltar,
 y la mira marca lo que rompería. Aparecen a partir del 4.º nivel de la Tortuga y del 3.º del Pulpo.
 
+**Bicolores (en el mapa):** perlas mitad de un color y mitad de otro. Valen por cualquiera de sus dos colores:
+una roja y verde explota con un grupo de rojas o con uno de verdes. No unen un grupo de un color con uno del otro.
+
+**De dos golpes (en el mapa):** salen tapadas por una concha de color arena que no cuenta para ningún grupo. Las
+destapa una bola que se pegue a ellas, sea del color que sea, o una explosión a su lado; desde entonces son perlas
+normales de su color. El cohete, la mina y las anclas las rompen directamente, tapadas o no.
+
+Las bicolores y las de dos golpes solo salen en los niveles difíciles, del 5.º al 10.º de cada temática.
+
 **Mina:** se gana cada vez que un disparo explota 3 o más bolas del mismo color. Vuela como una perla y, al pegarse, explota y
 rompe todo lo que haya a 2 casillas, sea del color que sea. Tecla M.
 
@@ -96,6 +105,8 @@ El generador es determinista, comprueba las mismas reglas que los tests y fija e
 
 Están en `src/maps.js` (y las formas del Pulpo, en `src/levels.js`). Cada fila es un texto de 10 letras (la primera fila es el techo):
 `r` rojo · `o` naranja · `y` amarillo · `g` verde · `b` azul · `p` morado · `v` ancla · `.` hueco.
+Las de dos golpes van con la letra de su color en mayúscula (`R O Y G B P`), y las bicolores, con una letra por
+pareja de colores (`BICOLOR_KEYS` en `src/levels.js`: `a` rojo-naranja, `c` rojo-amarillo… `t` azul-morado).
 La 2.ª, 4.ª, 6.ª… fila se dibujan desplazadas media burbuja a la derecha y tienen una bola menos
 (la última letra va siempre a `.`), para que los mapas puedan ser simétricos de izquierda a derecha.
 `shots` es el límite de disparos.

@@ -30,13 +30,17 @@ import {
   earnedSpecials,
   isAnchor,
   anchorDir,
+  isBicolor,
+  isShell,
+  shellValue,
+  colorsOf,
   anchorsTouching,
   anchorBlast,
   rotateAnchors,
   visibleRows,
 } from './logic.js';
 import { launcherLayout, launcherPositions, hitsLauncher, inCancelZone, readyToShoot } from './launcher.js';
-import { BOARD, LEVELS, THEMES, LEVELS_PER_THEME, themeOf, themeProgress, parseMap, starsFor, shotsForStars, normalizeProgress, recordWin } from './levels.js';
+import { BOARD, LEVELS, THEMES, LEVELS_PER_THEME, themeOf, themeProgress, isDevHost, parseMap, starsFor, shotsForStars, normalizeProgress, recordWin } from './levels.js';
 import { THEME_ART, animalSvg } from './animals.js';
 import { DEDICATION, MOM_SVG, CLOUD_SVG, HANDSOME_SVG, WINE_SVG } from './dedication.js';
 import { isDeliberateShot } from './input.js';
@@ -56,6 +60,9 @@ const ROCKET_SPEED = 820; // px/s: algo más lento que una perla, para que se ve
 const MIN_ANGLE = BOARD.minAngle;
 // v3: niveles por temáticas de animales. El progreso anterior no se aprovecha.
 const PROGRESS_KEY = 'progress-v3';
+// En desarrollo (el ordenador o la red de casa) todos los niveles están abiertos, para probar cambios.
+const DEV = isDevHost(location.hostname);
+const progressOf = (t) => themeProgress(state.progress, t, { allOpen: DEV });
 const SCROLL_DELAY = 1; // s entre que empiezan a caer las bolas y el mapa baja
 const CAM_SPEED = 420; // px/s al bajar el mapa un bloque
 const INTRO_HOLD = 1.2; // s mostrando la parte de arriba antes de bajar
@@ -470,7 +477,50 @@ function hexA(hex, a) {
 
 // Tonos del ancla para los efectos (explosión, chispas, estela).
 const ANCHOR_TONE = { base: '#9fb4c8', light: '#e6f3ff', dark: '#3c4f63' };
-const toneOf = (v) => (isAnchor(v) ? ANCHOR_TONE : COLORS[v]);
+// Concha de las burbujas de dos golpes, mientras siguen tapadas.
+const SHELL_TONE = { base: '#c9bfae', light: '#f4efe6', dark: '#6f6656' };
+function toneOf(v) {
+  if (isAnchor(v)) return ANCHOR_TONE;
+  if (isShell(v)) return SHELL_TONE;
+  return COLORS[colorsOf(v)[0]];
+}
+
+/** Burbuja de dos golpes tapada: una concha de color arena con sus estrías, sin pista de su color. */
+const shellSprite = (() => {
+  const size = Math.ceil((R * 2 + 4) * DPR);
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d');
+  g.scale(DPR, DPR);
+  const cx = R + 2;
+  const r = R - BUBBLE_GAP;
+  const body = g.createRadialGradient(cx - r * 0.3, cx - r * 0.35, r * 0.1, cx, cx, r);
+  body.addColorStop(0, SHELL_TONE.light);
+  body.addColorStop(0.55, SHELL_TONE.base);
+  body.addColorStop(1, SHELL_TONE.dark);
+  g.save();
+  g.beginPath();
+  g.arc(cx, cx, r, 0, Math.PI * 2);
+  g.fillStyle = body;
+  g.fill();
+  g.clip();
+  // estrías en abanico desde abajo, como una concha de almeja
+  g.strokeStyle = 'rgba(90,78,60,0.45)';
+  g.lineWidth = 1.3;
+  for (let i = -2; i <= 2; i++) {
+    g.beginPath();
+    g.moveTo(cx, cx + r * 0.85);
+    g.quadraticCurveTo(cx + i * r * 0.45, cx, cx + i * r * 0.32, cx - r);
+    g.stroke();
+  }
+  g.restore();
+  g.strokeStyle = 'rgba(255,255,255,0.45)';
+  g.lineWidth = 1;
+  g.beginPath();
+  g.arc(cx, cx, r - 0.5, 0, Math.PI * 2);
+  g.stroke();
+  return c;
+})();
 
 /** Ancla del mapa: burbuja de metal; la flecha se dibuja encima, girada hacia donde apunta. */
 const anchorSprite = (() => {
@@ -542,7 +592,28 @@ function drawBubble(ctx, x, y, color, scale = 1, alpha = 1) {
     return;
   }
   ctx.globalAlpha = alpha;
-  ctx.drawImage(sprites[color], x - s, y - s, s * 2, s * 2);
+  if (isShell(color)) {
+    ctx.drawImage(shellSprite, x - s, y - s, s * 2, s * 2);
+  } else if (isBicolor(color)) {
+    // mitad y mitad: un color a la izquierda, el otro a la derecha, con una raya blanca en medio
+    const [a, b] = colorsOf(color);
+    for (const [tone, from] of [[a, -s], [b, 0]]) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x + from, y - s, s, s * 2);
+      ctx.clip();
+      ctx.drawImage(sprites[tone], x - s, y - s, s * 2, s * 2);
+      ctx.restore();
+    }
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+    ctx.lineWidth = 1.5 * scale;
+    ctx.beginPath();
+    ctx.moveTo(x, y - (R - BUBBLE_GAP) * scale);
+    ctx.lineTo(x, y + (R - BUBBLE_GAP) * scale);
+    ctx.stroke();
+  } else {
+    ctx.drawImage(sprites[color], x - s, y - s, s * 2, s * 2);
+  }
   ctx.globalAlpha = 1;
 }
 
@@ -810,7 +881,7 @@ function showScreen(html, background) {
 
 /** Temática que toca: la primera sin completar que esté abierta. */
 function currentTheme() {
-  const t = THEMES.findIndex((_, i) => themeProgress(state.progress, i).next != null);
+  const t = THEMES.findIndex((_, i) => progressOf(i).next != null);
   return t === -1 ? THEMES.length - 1 : t;
 }
 
@@ -820,9 +891,9 @@ function showMenu() {
   stopRocketSound();
   state.projectile = null;
   const cur = currentTheme();
-  const total = THEMES.reduce((n, _, t) => n + themeProgress(state.progress, t).stars, 0);
+  const total = THEMES.reduce((n, _, t) => n + progressOf(t).stars, 0);
   const cards = THEMES.map((theme, t) => {
-    const tp = themeProgress(state.progress, t);
+    const tp = progressOf(t);
     const done = tp.best.filter(Boolean).length;
     const state_ = !tp.unlocked ? 'locked' : tp.completed ? 'done' : 'open';
     const label = `${theme.name}: ${!tp.unlocked ? 'bloqueada' : `${done} de ${LEVELS_PER_THEME} niveles, ${tp.stars} estrellas`}`;
@@ -859,7 +930,7 @@ function showTheme(t) {
   stopRocketSound();
   state.projectile = null;
   const theme = THEMES[t];
-  const tp = themeProgress(state.progress, t);
+  const tp = progressOf(t);
   const first = t * LEVELS_PER_THEME;
   const reached = tp.completed ? LEVELS_PER_THEME : tp.next == null ? 0 : tp.next + 1;
   const pts = (n) => PATH.slice(0, n).map((p) => `${p.x},${p.y}`).join(' ');
@@ -867,7 +938,7 @@ function showTheme(t) {
     const level = LEVELS[first + i];
     const isDone = tp.best[i] > 0;
     const isNext = tp.next === i;
-    const locked = !isDone && !isNext;
+    const locked = !tp.open[i];
     const boss = i === LEVELS_PER_THEME - 1;
     const cls = ['node', isDone && 'done', isNext && 'next', locked && 'locked', boss && 'boss'].filter(Boolean).join(' ');
     const label = `Nivel ${i + 1}: ${level.name}, ${locked ? 'bloqueado' : isDone ? `${tp.best[i]} de 3 estrellas` : 'siguiente'}`;
@@ -885,6 +956,8 @@ function showTheme(t) {
   } else if (tp.next != null) {
     const level = LEVELS[first + tp.next];
     foot = `<button type="button" class="btn" data-action="level" data-arg="${first + tp.next}">Jugar nivel ${tp.next + 1} · ${esc(level.name)}</button>`;
+  } else if (DEV) {
+    foot = `<div class="locked-foot">En desarrollo: todos los niveles abiertos</div>`;
   } else {
     foot = `<div class="locked-foot">${LOCK} Completa ${esc(THEMES[t - 1].name)} para desbloquearla</div>`;
   }
@@ -1179,6 +1252,11 @@ function land(p) {
   state.gridVersion = (state.gridVersion || 0) + 1;
   state.projectile = null;
   anchorBeams(res.anchors ?? []);
+  // las de dos golpes que se destapan: la concha salta y se ve su color
+  (res.uncovered ?? []).forEach(({ row: r, col: c, color }, i) => {
+    const { x, y } = cellCenter(state.grid, r, c, R);
+    state.effects.push({ type: 'pop', x, y, color: shellValue(color), t: -i * 0.04, life: 0.3 });
+  });
 
   if (res.popped.length) {
     state.streak++;

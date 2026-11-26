@@ -66,11 +66,60 @@ function flood(grid, starts, accept) {
   return { out, seen };
 }
 
-/** Burbujas conectadas del mismo color que la de (r, c), incluida ella. */
-export function findCluster(grid, r, c) {
-  const color = inBounds(grid, r, c) ? grid.cells[r][c] : null;
-  if (color == null) return [];
-  return flood(grid, [[r, c]], (v) => v === color).out;
+// ── Burbujas bicolor y de dos golpes ─────────────────────────────────────
+// Vienen puestas en algunos mapas. Una bicolor (mitad de un color, mitad de
+// otro) vale por cualquiera de sus dos colores, pero no une un grupo de un
+// color con uno del otro. Una de dos golpes sale tapada, de un color neutro
+// que no cuenta para nada; la destapa una bola que se pegue a ella o una
+// explosión a su lado, y desde entonces es una perla normal de su color.
+//
+// En la rejilla, una perla vale su color (0…5); una bicolor, BICOLOR +
+// 6 × el color menor + el mayor; una de dos golpes tapada, SHELL + su color.
+
+export const BICOLOR = 20;
+export const SHELL = 60;
+const NCOLORS = 6;
+
+export const isColor = (v) => Number.isInteger(v) && v >= 0 && v < NCOLORS;
+export const bicolorValue = (a, b) => BICOLOR + NCOLORS * Math.min(a, b) + Math.max(a, b);
+export const isBicolor = (v) => Number.isInteger(v) && v >= BICOLOR && v < BICOLOR + NCOLORS * NCOLORS;
+export const shellValue = (color) => SHELL + color;
+export const isShell = (v) => Number.isInteger(v) && v >= SHELL && v < SHELL + NCOLORS;
+export const shellColor = (v) => v - SHELL;
+
+/** Colores por los que vale una casilla: el suyo, los dos de una bicolor o ninguno (tapada, ancla). */
+export function colorsOf(v) {
+  if (isColor(v)) return [v];
+  if (isBicolor(v)) return [Math.floor((v - BICOLOR) / NCOLORS), (v - BICOLOR) % NCOLORS];
+  return [];
+}
+
+const matches = (v, color) => colorsOf(v).includes(color);
+
+/**
+ * Burbujas conectadas que valen por `color`, desde (r, c) e incluida ella.
+ * Sin `color`, el de la casilla; en una bicolor, el de su grupo más grande;
+ * una tapada o un ancla van solas.
+ */
+export function findCluster(grid, r, c, color) {
+  const v = inBounds(grid, r, c) ? grid.cells[r][c] : null;
+  if (v == null) return [];
+  if (color != null) return flood(grid, [[r, c]], (w) => matches(w, color)).out;
+  const groups = colorsOf(v).map((col) => findCluster(grid, r, c, col));
+  if (!groups.length) return [[r, c]];
+  return groups.reduce((a, b) => (b.length > a.length ? b : a));
+}
+
+/** Destapa las burbujas de dos golpes que hay en `cells`: pasan a ser perlas de su color. */
+function uncoverShells(grid, cells) {
+  const out = [];
+  for (const [row, col] of cells) {
+    const v = grid.cells[row][col];
+    if (!isShell(v)) continue;
+    grid.cells[row][col] = shellColor(v);
+    out.push({ row, col, color: shellColor(v) });
+  }
+  return out;
 }
 
 /** Burbujas que ya no están unidas al techo (fila 0) por ningún camino. */
@@ -108,14 +157,15 @@ export function placeBubble(grid, r, c, color, { visible = null } = {}) {
 
   // anclas del mapa que toca la bola: rompen su columna (y en cadena)
   const touched = anchorsTouching(grid, r, c);
-  const cluster = findCluster(grid, r, c);
-  if (cluster.length < MIN_MATCH && !touched.length) return { popped: [], dropped: [], anchors: [] };
-
+  const cluster = findCluster(grid, r, c, color);
   const popped = cluster.length >= MIN_MATCH ? removeCells(grid, cluster) : [];
-  const blast = anchorBlast(grid, touched, visible);
+  const blast = touched.length ? anchorBlast(grid, touched, visible) : { cells: [], anchors: [] };
   popped.push(...removeCells(grid, blast.cells));
-  const dropped = removeCells(grid, findFloating(grid));
-  return { popped, dropped, anchors: blast.anchors };
+  // las de dos golpes que toca la bola o que tienen una explosión al lado se destapan
+  const hit = [[r, c], ...popped.map((b) => [b.row, b.col])].flatMap(([hr, hc]) => neighbors(grid, hr, hc));
+  const uncovered = uncoverShells(grid, hit);
+  const dropped = popped.length ? removeCells(grid, findFloating(grid)) : [];
+  return { popped, dropped, anchors: blast.anchors, uncovered };
 }
 
 /**
@@ -123,9 +173,9 @@ export function placeBubble(grid, r, c, color, { visible = null } = {}) {
  * tablero: el grupo del mismo color al que se uniría y si llegaría a explotar.
  */
 export function matchPreview(grid, r, c, color) {
-  const starts = neighbors(grid, r, c).filter(([nr, nc]) => grid.cells[nr][nc] === color);
+  const starts = neighbors(grid, r, c).filter(([nr, nc]) => matches(grid.cells[nr][nc], color));
   if (!starts.length) return { cells: [], pops: false };
-  const { out } = flood(grid, starts, (v) => v === color);
+  const { out } = flood(grid, starts, (v) => matches(v, color));
   return { cells: out, pops: out.length + 1 >= MIN_MATCH };
 }
 
@@ -148,7 +198,7 @@ export function isEmpty(grid) {
 
 export function colorsOnBoard(grid) {
   const set = new Set();
-  for (const row of grid.cells) for (const v of row) if (v != null && !isAnchor(v)) set.add(v);
+  for (const row of grid.cells) for (const v of row) for (const color of colorsOf(v)) set.add(color);
   return [...set].sort((a, b) => a - b);
 }
 
@@ -611,12 +661,12 @@ export function rainbowColor(grid, r, c) {
   let best = null;
   let bestSize = 0;
   for (const [nr, nc] of neighbors(grid, r, c)) {
-    const color = grid.cells[nr][nc];
-    if (color == null || isAnchor(color)) continue;
-    const size = findCluster(grid, nr, nc).length;
-    if (size > bestSize || (size === bestSize && color < best)) {
-      best = color;
-      bestSize = size;
+    for (const color of colorsOf(grid.cells[nr][nc])) {
+      const size = findCluster(grid, nr, nc, color).length;
+      if (size > bestSize || (size === bestSize && color < best)) {
+        best = color;
+        bestSize = size;
+      }
     }
   }
   return best;

@@ -10,6 +10,7 @@ import {
   placeBubble,
   simulateShot,
   colorsOnBoard,
+  colorsOf,
   isEmpty,
   neighbors,
   lowestOccupiedRow,
@@ -41,7 +42,7 @@ function evaluate(grid, cell, color, lowest, visible) {
   const g = cloneGrid(grid);
   const res = placeBubble(g, cell.row, cell.col, color, { visible });
   if (res.popped.length) return 100 + res.popped.length + res.dropped.length * 1.5;
-  const same = neighbors(grid, cell.row, cell.col).filter(([r, c]) => grid.cells[r][c] === color).length;
+  const same = neighbors(grid, cell.row, cell.col).filter(([r, c]) => colorsOf(grid.cells[r][c]).includes(color)).length;
   return same * 5 - Math.max(0, cell.row - lowest) * 4 - cell.row * 0.01;
 }
 
