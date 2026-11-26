@@ -2,6 +2,7 @@ import {
   placeBubble,
   isEmpty,
   colorsOnBoard,
+  bubblesLeft,
   cellCenter,
   rowHeight,
   simulateShot,
@@ -646,9 +647,10 @@ canvas.height = H * DPR;
 ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
 
 const ui = {
-  score: document.getElementById('score'),
-  level: document.getElementById('level'),
-  shots: document.getElementById('shots'),
+  tank: document.getElementById('tank'),
+  tankWater: document.getElementById('tank-water'),
+  swimmer: document.getElementById('tank-swimmer'),
+  left: document.getElementById('left'),
   mute: document.getElementById('mute'),
   maps: document.getElementById('maps'),
   // un botón por bola especial, en la fila de iconos bajo el lanzador
@@ -734,6 +736,7 @@ function ensureColorsValid() {
 function startLevel(index) {
   state.levelIndex = index;
   state.grid = parseMap(LEVELS[index].map);
+  state.startBubbles = bubblesLeft(state.grid);
   state.gridVersion = (state.gridVersion || 0) + 1;
   state.score = 0;
   state.shots = 0;
@@ -777,12 +780,30 @@ function finishIntro() {
 
 const shotsLeft = () => LEVELS[state.levelIndex].shots - state.shots;
 
+/**
+ * La pecera de arriba: el animal de la temática nada hacia la bandera según
+ * las burbujas rotas, y a la derecha se ven las que quedan.
+ */
 function updateHud() {
-  ui.score.textContent = state.score;
-  ui.level.textContent = `${LEVELS[state.levelIndex].number}/${LEVELS_PER_THEME}`;
-  const left = shotsLeft();
-  ui.shots.textContent = left;
-  ui.shots.classList.toggle('warn', left <= 5);
+  const left = state.grid ? bubblesLeft(state.grid) : 0;
+  const total = state.startBubbles || left || 1;
+  const done = Math.min(1, Math.max(0, 1 - left / total));
+  const key = THEMES[themeOf(state.levelIndex)].key;
+  if (ui.swimmer.dataset.key !== key) {
+    ui.swimmer.dataset.key = key;
+    ui.swimmer.innerHTML = animalSvg(key, THEMES[themeOf(state.levelIndex)].name);
+    ui.swimmer.className = `tank-swimmer face-${THEME_ART[key].facing}`;
+  }
+  // el agua llena el tubo y el animal va por delante, hasta la bandera
+  ui.tankWater.style.width = `calc(${done} * (100% - 6px))`;
+  ui.swimmer.style.left = `min(calc(100% - 62px), max(4px, calc(${done} * (100% - 6px) - 34px)))`;
+  ui.tank.setAttribute('aria-valuenow', String(Math.round(done * 100)));
+  if (ui.left.textContent !== String(left)) {
+    ui.left.textContent = left;
+    ui.left.classList.remove('bump');
+    void ui.left.offsetWidth; // reinicia la animación
+    ui.left.classList.add('bump');
+  }
   updateSpecials();
   ui.mute.textContent = sfx.muted ? '🔇' : '🔊';
   ui.mute.setAttribute('aria-label', sfx.muted ? 'Activar sonido' : 'Silenciar');

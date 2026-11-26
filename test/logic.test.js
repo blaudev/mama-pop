@@ -45,6 +45,7 @@ import {
   bicolorValue,
   shellValue,
   colorsOf,
+  bubblesLeft,
 } from '../src/logic.js';
 
 const R = 10;
@@ -650,4 +651,14 @@ test('de dos golpes: la destapa una explosión a su lado', () => {
   assert.equal(res.popped.length, 3);
   assert.deepEqual(res.uncovered, [{ row: 0, col: 0, color: 4 }]);
   assert.equal(g.cells[0][0], 4);
+});
+
+test('bubblesLeft cuenta todo lo que queda por romper: perlas, bicolores, tapadas y anclas', () => {
+  const g = createGrid(5, 8);
+  assert.equal(bubblesLeft(g), 0);
+  g.cells[0][0] = 1;
+  g.cells[0][1] = bicolorValue(0, 2);
+  g.cells[0][2] = shellValue(3);
+  g.cells[0][3] = anchorValue(2);
+  assert.equal(bubblesLeft(g), 4);
 });

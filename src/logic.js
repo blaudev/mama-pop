@@ -192,6 +192,13 @@ export function lowestOccupiedRow(grid) {
   return -1;
 }
 
+/** Burbujas que quedan en el tablero (todo lo que hay que romper para ganar, anclas incluidas). */
+export function bubblesLeft(grid) {
+  let n = 0;
+  for (const row of grid.cells) for (const v of row) if (v != null) n++;
+  return n;
+}
+
 export function isEmpty(grid) {
   return lowestOccupiedRow(grid) === -1;
 }
