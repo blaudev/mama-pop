@@ -15,6 +15,12 @@ import {
   nextCamera,
   ROCKET,
   ROCKET_REACH,
+  SUPER_ROCKET,
+  SUPER_ROCKET_REACH,
+  SUPER_CHARGE,
+  chargeRocket,
+  normalizeCharge,
+  rocketToArm,
   rocketPath,
   fireRocket,
   addSpecial,
@@ -706,6 +712,7 @@ const ui = {
     [MINE]: { name: 'Mina', btn: document.getElementById('special-mine'), count: document.getElementById('mine-count') },
     [RAINBOW]: { name: 'Perla arcoíris', btn: document.getElementById('special-rainbow'), count: document.getElementById('rainbow-count') },
   },
+  charge: document.getElementById('rocket-charge'), // carga del supercohete en el icono del cohete
   overlay: document.getElementById('overlay'),
   title: document.getElementById('overlay-title'),
   text: document.getElementById('overlay-text'),
@@ -738,7 +745,8 @@ const state = {
   streak: 0, // disparos seguidos que explotan algo
   history: [], // últimos disparos { color, popped }, para no repetir colores sin sentido
   specials: normalizeSpecials(store.get('specials', null)), // bolas especiales guardadas: { rocket: 2 }; pasan de un mapa a otro
-  armed: null, // especial cargada en el cañón (ROCKET) o null
+  armed: null, // especial cargada en el cañón (ROCKET, SUPER_ROCKET, MINE, RAINBOW) o null
+  charge: normalizeCharge(store.get('rocketCharge', null)), // carga del supercohete (0…SUPER_CHARGE-1); pasa de un mapa a otro
   hover: false, // ratón (o dedo) sobre el lanzador
   hoverK: 0, // transición del hover, de 0 a 1
   aimCache: null,
@@ -859,15 +867,28 @@ function updateHud() {
 /** Fila de bolas especiales: contadores, cuáles se pueden usar y cuál está cargada. `gained` hace saltar ese icono. */
 function updateSpecials(gained = null) {
   store.set('specials', state.specials);
+  store.set('rocketCharge', state.charge);
   for (const kind of SPECIALS) {
     const { name, btn, count } = ui.specials[kind];
     const n = state.specials[kind] ?? 0;
     const armed = state.armed === kind;
-    count.textContent = n;
-    btn.disabled = n === 0 && !armed;
-    btn.setAttribute('aria-pressed', String(armed));
-    btn.setAttribute('aria-label', `${name}: ${n === 1 ? 'queda 1' : `quedan ${n}`}${armed ? ', cargada' : ''}`);
-    if (gained === kind) {
+    // el botón del cohete lleva también los supercohetes y la carga que los da
+    const supers = kind === ROCKET ? state.specials[SUPER_ROCKET] ?? 0 : 0;
+    const total = n + supers;
+    const pressed = armed || (kind === ROCKET && state.armed === SUPER_ROCKET);
+    count.textContent = total;
+    btn.disabled = total === 0 && !pressed;
+    btn.setAttribute('aria-pressed', String(pressed));
+    let label = `${name}: ${total === 1 ? 'queda 1' : `quedan ${total}`}`;
+    if (kind === ROCKET) {
+      btn.classList.toggle('super', supers > 0);
+      btn.style.setProperty('--charge', String(state.charge / SUPER_CHARGE));
+      ui.charge.textContent = `${state.charge}/${SUPER_CHARGE}`;
+      if (supers) label += ` (${supers === 1 ? '1 supercohete' : `${supers} supercohetes`})`;
+      label += `. Supercohete: ${state.charge} de ${SUPER_CHARGE}`;
+    }
+    btn.setAttribute('aria-label', `${label}${pressed ? ', cargado' : ''}`);
+    if (gained === kind || (kind === ROCKET && gained === SUPER_ROCKET)) {
       btn.classList.remove('gain');
       void btn.offsetWidth; // reinicia la animación
       btn.classList.add('gain');
@@ -879,16 +900,20 @@ function updateSpecials(gained = null) {
 function toggleSpecial(kind) {
   if (!['playing', 'flying', 'scrolling'].includes(state.mode)) return;
   const before = state.armed;
+  if (kind === ROCKET) kind = rocketToArm(state.armed, state.specials); // el supercohete va primero
   state.armed = toggleArmed(state.armed, state.specials, kind);
   if (state.armed !== before) sfx.arm(state.armed != null);
   updateSpecials();
 }
 
-const AWARD_TEXT = { [ROCKET]: '¡Cohete!', [MINE]: '¡Mina!', [RAINBOW]: '¡Perla arcoíris!' };
+const AWARD_TEXT = { [ROCKET]: '¡Cohete!', [SUPER_ROCKET]: '¡Supercohete!', [MINE]: '¡Mina!', [RAINBOW]: '¡Perla arcoíris!' };
+const isRocket = (kind) => kind === ROCKET || kind === SUPER_ROCKET;
 
 /** Suma una especial ganada a la fila de iconos, con su aviso. `i` separa los avisos si se ganan varias a la vez. */
 function award(kind, i = 0) {
+  const before = state.specials[kind] ?? 0;
   state.specials = addSpecial(state.specials, kind);
+  if ((state.specials[kind] ?? 0) === before) return; // ya tiene el máximo: no hay premio
   state.effects.push({ type: 'text', x: W / 2, y: state.cam + H * (0.6 + 0.07 * i), text: AWARD_TEXT[kind], t: 0, life: 1.2, big: true });
   updateSpecials(kind);
   sfx.gain();
@@ -1129,22 +1154,27 @@ function aimShot() {
  * pantalla (aunque él siga hasta salir por arriba). Lo usan la mira y el
  * disparo, así que la mira nunca miente.
  */
-function rocketShot() {
-  const key = `${state.angle}|${state.cam}|${state.gridVersion}`;
+function rocketShot(kind = state.armed) {
+  const key = `${kind}|${state.angle}|${state.cam}|${state.gridVersion}`;
   if (state.rocketCache?.key === key) return state.rocketCache.shot;
   const start = { x: SHOOTER.x, y: SHOOTER.y + state.cam };
-  const path = rocketPath(state.grid, start, state.angle, R, W, state.cam - 3 * R);
+  const path = rocketPath(state.grid, start, state.angle, R, W, state.cam - 3 * R, rocketReach(kind) * R);
   const shot = { ...path, cells: path.cells.filter((c) => cellCenter(state.grid, c.row, c.col, R).y >= state.cam) };
   state.rocketCache = { key, shot };
   return shot;
 }
 
-function shootRocket() {
-  const used = useSpecial(state.specials, ROCKET);
+/** Alcance a cada lado del cohete `kind`, como múltiplo de R. */
+function rocketReach(kind) {
+  return kind === SUPER_ROCKET ? SUPER_ROCKET_REACH : ROCKET_REACH;
+}
+
+function shootRocket(kind) {
+  const used = useSpecial(state.specials, kind);
   if (!used.ok) return;
   state.specials = used.inv;
   state.armed = null;
-  const shot = rocketShot();
+  const shot = rocketShot(kind);
   const res = fireRocket(state.grid, shot.cells, { visible: inView() });
   state.gridVersion = (state.gridVersion || 0) + 1;
 
@@ -1180,6 +1210,7 @@ function shootRocket() {
 
   state.projectile = {
     rocket: true,
+    super: kind === SUPER_ROCKET,
     angle: state.angle,
     path: shot.points,
     seg: 0,
@@ -1190,8 +1221,8 @@ function shootRocket() {
     result: res,
   };
   sfx.rocket();
-  flash(0.25, '255,220,160');
-  state.shake = Math.max(state.shake, 0.25);
+  flash(kind === SUPER_ROCKET ? 0.4 : 0.25, '255,220,160');
+  state.shake = Math.max(state.shake, kind === SUPER_ROCKET ? 0.4 : 0.25);
   burst(SHOOTER.x, SHOOTER.y + state.cam, SMOKE_TONE, { n: 26, speed: 220, size: 6, life: 0.8, gravity: -80 });
   // El cohete es un premio: no gasta aire ni cambia las perlas que esperan.
   state.mode = 'flying';
@@ -1218,8 +1249,8 @@ function finishRocket(p) {
 function shoot() {
   if (state.mode !== 'playing' || shotsLeft() <= 0) return;
   if (!readyToShoot(state.time, state.lastLandAt)) return; // pausa corta: evita dobles toques
-  if (state.armed === ROCKET) {
-    shootRocket();
+  if (isRocket(state.armed)) {
+    shootRocket(state.armed);
     return;
   }
   const shot = aimShot();
@@ -1387,12 +1418,21 @@ function land(p) {
     }
     // Premios (solo con perlas normales, para que una especial no dé otra):
     // cohete por racha, mina por grupo grande, perla arcoíris por avalancha.
+    // La carga del supercohete sube con cada perla normal que explota algo.
     if (!p.special) {
-      earnedSpecials(state.streak, res.popped.length, res.dropped.length).forEach((kind, i) => award(kind, i));
+      const charged = chargeRocket(state.charge, res.popped.length);
+      state.charge = charged.charge;
+      earnedSpecials(state.streak, res.popped.length, res.dropped.length, charged.full).forEach((kind, i) => award(kind, i));
+      updateSpecials();
     }
   } else {
     sfx.stick();
     state.streak = 0;
+    // un fallo vacía la carga del supercohete
+    if (!p.special && state.charge) {
+      state.charge = 0;
+      updateSpecials();
+    }
   }
 
   settle();
@@ -2048,37 +2088,79 @@ function drawBanner() {
   ctx.globalAlpha = 1;
 }
 
-/** Mira del cohete: una franja recta y las burbujas que va a romper, parpadeando en naranja. */
+/**
+ * Mira del cohete: un haz tan ancho como lo que rompe, con los bordes bien
+ * marcados, y las burbujas que va a romper teñidas y parpadeando. El del
+ * supercohete es más ancho y dorado.
+ */
 function drawRocketAim() {
-  const shot = rocketShot();
+  const kind = state.armed;
+  const shot = rocketShot(kind);
   const [a, b] = shot.points;
-  ctx.lineCap = 'round';
-  ctx.strokeStyle = 'rgba(255,179,77,0.16)';
-  ctx.lineWidth = 2 * R * ROCKET_REACH; // tan ancha como lo que rompe
-  ctx.beginPath();
-  ctx.moveTo(a.x, a.y);
-  ctx.lineTo(b.x, b.y);
-  ctx.stroke();
-  ctx.strokeStyle = '#ffd27a';
-  ctx.lineWidth = 3;
-  ctx.setLineDash([10, 18]);
-  ctx.lineDashOffset = -state.time * 50;
-  ctx.beginPath();
-  ctx.moveTo(a.x, a.y);
-  ctx.lineTo(b.x, b.y);
-  ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.lineDashOffset = 0;
-  ctx.lineCap = 'butt';
+  const reach = R * rocketReach(kind);
+  const sup = kind === SUPER_ROCKET;
+  const pulse = 0.5 + 0.5 * Math.sin(state.time * 6);
+  const len = Math.hypot(b.x - a.x, b.y - a.y);
+  if (len < 1) return;
+  const ux = (b.x - a.x) / len;
+  const uy = (b.y - a.y) / len;
+  // perpendicular a la recta, para los dos bordes del haz
+  const nx = -uy * reach;
+  const ny = ux * reach;
 
-  drawTargetRings(shot.cells);
+  ctx.save();
+  // relleno del haz: más intenso cerca del cañón y desvaneciéndose hacia arriba
+  const fill = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
+  const tone = sup ? '255,214,90' : '255,160,60';
+  fill.addColorStop(0, `rgba(${tone},${0.42 + 0.1 * pulse})`);
+  fill.addColorStop(1, `rgba(${tone},${0.18 + 0.06 * pulse})`);
+  ctx.fillStyle = fill;
+  ctx.beginPath();
+  ctx.moveTo(a.x + nx, a.y + ny);
+  ctx.lineTo(b.x + nx, b.y + ny);
+  ctx.lineTo(b.x - nx, b.y - ny);
+  ctx.lineTo(a.x - nx, a.y - ny);
+  ctx.closePath();
+  ctx.fill();
+
+  // bordes: líneas claras con un trazo que corre hacia arriba
+  ctx.shadowColor = sup ? '#ffd23a' : '#ff8c28';
+  ctx.shadowBlur = 10;
+  ctx.strokeStyle = sup ? '#fff1a8' : '#ffd27a';
+  ctx.lineWidth = 3;
+  ctx.lineCap = 'round';
+  ctx.setLineDash([14, 10]);
+  ctx.lineDashOffset = -state.time * 60;
+  for (const side of [1, -1]) {
+    ctx.beginPath();
+    ctx.moveTo(a.x + side * nx, a.y + side * ny);
+    ctx.lineTo(b.x + side * nx, b.y + side * ny);
+    ctx.stroke();
+  }
+  // eje central, más fino
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 12]);
+  ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+  ctx.restore();
+
+  drawTargetRings(shot.cells, { fill: true });
 }
 
-/** Anillos naranjas que parpadean sobre las burbujas que va a romper una especial. */
-function drawTargetRings(cells) {
+/** Anillos naranjas que parpadean sobre las burbujas que va a romper una especial (`fill`: además, las tiñe). */
+function drawTargetRings(cells, { fill = false } = {}) {
   const pulse = 0.5 + 0.5 * Math.sin(state.time * 9);
   for (const c of cells) {
     const p = cellCenter(state.grid, c.row, c.col, R);
+    if (fill) {
+      ctx.fillStyle = `rgba(255,140,40,${0.28 + 0.22 * pulse})`;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, R, 0, Math.PI * 2);
+      ctx.fill();
+    }
     ctx.save();
     ctx.shadowColor = '#ff8c28';
     ctx.shadowBlur = 8 + 8 * pulse;
@@ -2103,7 +2185,7 @@ function isAiming() {
 
 function drawAim() {
   if (state.mode !== 'playing' || state.cancelAim || !isAiming()) return;
-  if (state.armed === ROCKET) {
+  if (isRocket(state.armed)) {
     drawRocketAim();
     return;
   }
@@ -2337,9 +2419,14 @@ function hopAt(t) {
  * mode: 'idle' en el cañón (tiembla, da saltitos y la llama se dispara, como
  * si quisiera despegar), 'calm' esperando como siguiente, 'flight' volando.
  */
-function drawRocket(x, y, rot, scale, mode) {
+function drawRocket(x, y, rot, scale, mode, sup = false) {
   const t = state.time;
+  if (sup) scale *= 1.2; // el supercohete es algo más grande
   const k = (scale * R * 3) / 60;
+  // colores: el normal es rojo; el supercohete, morado y dorado
+  const C = sup
+    ? { fin: '#8b3fd9', finEdge: '#3d1470', body: '#fff4c2', nose: '#8b3fd9', band: '#ffcf3a', keel: '#6a2aa8', halo: '255,214,90' }
+    : { fin: '#e5484d', finEdge: '#7a1f24', body: '#f4ecdf', nose: '#e5484d', band: '#c9953c', keel: '#b8343a', halo: '255,190,90' };
   let ox = 0;
   let oy = 0;
   let wobble = 0;
@@ -2369,10 +2456,10 @@ function drawRocket(x, y, rot, scale, mode) {
 
   // halo naranja que late
   if (mode !== 'calm') {
-    const gr = R * 2.2 * scale;
+    const gr = R * (sup ? 2.8 : 2.2) * scale;
     const g = ctx.createRadialGradient(0, 4 * k, 0, 0, 4 * k, gr);
-    g.addColorStop(0, `rgba(255,190,90,${0.35 + 0.2 * Math.sin(t * 4.8) + 0.25 * boost})`);
-    g.addColorStop(1, 'rgba(255,190,90,0)');
+    g.addColorStop(0, `rgba(${C.halo},${0.35 + 0.2 * Math.sin(t * 4.8) + 0.25 * boost})`);
+    g.addColorStop(1, `rgba(${C.halo},0)`);
     ctx.fillStyle = g;
     ctx.beginPath();
     ctx.arc(0, 4 * k, gr, 0, Math.PI * 2);
@@ -2410,19 +2497,19 @@ function drawRocket(x, y, rot, scale, mode) {
   ctx.restore();
 
   ctx.lineJoin = 'round';
-  ctx.fillStyle = '#e5484d';
-  ctx.strokeStyle = '#7a1f24';
+  ctx.fillStyle = C.fin;
+  ctx.strokeStyle = C.finEdge;
   ctx.lineWidth = 1.2;
   ctx.fill(RK.finL);
   ctx.stroke(RK.finL);
   ctx.fill(RK.finR);
   ctx.stroke(RK.finR);
-  ctx.fillStyle = '#f4ecdf';
+  ctx.fillStyle = C.body;
   ctx.strokeStyle = '#7a5418';
   ctx.lineWidth = 1.5;
   ctx.fill(RK.body);
   ctx.stroke(RK.body);
-  ctx.fillStyle = '#e5484d';
+  ctx.fillStyle = C.nose;
   ctx.fill(RK.nose);
   ctx.strokeStyle = 'rgba(255,255,255,0.7)';
   ctx.lineWidth = 2;
@@ -2439,9 +2526,9 @@ function drawRocket(x, y, rot, scale, mode) {
   ctx.beginPath();
   ctx.arc(18.3, 26.3, 1.6, 0, Math.PI * 2);
   ctx.fill();
-  ctx.fillStyle = '#c9953c';
+  ctx.fillStyle = C.band;
   ctx.fillRect(9.2, 39, 21.6, 3.5);
-  ctx.fillStyle = '#b8343a';
+  ctx.fillStyle = C.keel;
   ctx.fill(RK.keel);
   ctx.fillStyle = '#5a6470';
   ctx.fill(RK.nozzle);
@@ -2461,7 +2548,7 @@ function drawRocketFlight(p) {
     ctx.stroke();
   });
   ctx.globalAlpha = 1;
-  drawRocket(p.x, p.y, -p.angle + Math.PI / 2, 1, 'flight');
+  drawRocket(p.x, p.y, -p.angle + Math.PI / 2, 1, 'flight', p.super);
 }
 
 /** Arrastrando hasta el lanzador: el aro se pone rojo con una ✕ y un aviso. */
@@ -2558,7 +2645,7 @@ function drawShooter() {
     };
     drawBubble(ctx, next.x, next.y, state.next, next.scale * (1 + 0.06 * h) * refill('next'));
     // con el cohete cargado, ocupa el sitio de la perla actual y apunta hacia donde se dispara
-    if (state.armed === ROCKET) drawRocket(current.x, current.y - 4, -state.angle + Math.PI / 2, current.scale, 'idle');
+    if (isRocket(state.armed)) drawRocket(current.x, current.y - 4, -state.angle + Math.PI / 2, current.scale, 'idle', state.armed === SUPER_ROCKET);
     else if (state.armed) drawSpecialBall(state.armed, current.x, current.y, current.scale);
     else drawBubble(ctx, current.x, current.y, state.current, current.scale * refill('current'));
   }

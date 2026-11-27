@@ -452,7 +452,7 @@ canvas {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: calc(var(--icon) * 0.32);
+  gap: calc(var(--icon) * 0.42); /* hueco para la carga del cohete, que asoma por debajo */
   pointer-events: none; /* solo los botones reciben toques; el resto sigue siendo tablero */
 }
 
@@ -511,6 +511,10 @@ canvas {
 
 .special:disabled {
   cursor: not-allowed;
+}
+
+/* Sin ninguna: el dibujo en gris (la carga del supercohete sigue en color) */
+.special:disabled .icon {
   filter: grayscale(0.85) brightness(0.7);
 }
 
@@ -558,6 +562,72 @@ canvas {
 /* Sin ninguna: icono gris y sin número */
 .special:disabled .count {
   display: none;
+}
+
+/* ── Carga del supercohete, dentro del icono del cohete ──
+   El fondo se llena de abajo arriba (--charge, de 0 a 1) y una etiqueta
+   abajo cuenta «7/10». Se ve aunque no queden cohetes. */
+.special.rocket {
+  overflow: visible;
+}
+
+.special.rocket .fill {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.special.rocket .fill::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: calc(var(--charge, 0) * 100%);
+  background: linear-gradient(to top, #ffb300, #ffe27a);
+  opacity: 0.85;
+  transition: height 0.35s cubic-bezier(0.3, 1.4, 0.5, 1);
+}
+
+.special.rocket .icon {
+  position: relative; /* por encima del relleno */
+}
+
+.special .charge {
+  position: absolute;
+  left: 50%;
+  bottom: -11px;
+  transform: translateX(-50%);
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #0b2a44;
+  color: #ffe27a;
+  font: 800 12px/1.1 var(--font);
+  white-space: nowrap;
+  box-shadow: 0 0 0 2px var(--brass-dark);
+  pointer-events: none;
+}
+
+/* Hay supercohete: brilla en dorado y morado */
+.special.rocket.super {
+  background: radial-gradient(circle at 40% 35%, #a865f0, #3d1470);
+  box-shadow: 0 0 0 3px var(--gold), 0 0 0 5px var(--brass-dark), 0 0 18px rgba(255, 214, 90, 0.9);
+  animation: special-super 1.2s ease-in-out infinite alternate;
+}
+
+.special.rocket.super .count {
+  background: linear-gradient(135deg, #ffe27a, #b072ff);
+}
+
+@keyframes special-super {
+  from {
+    box-shadow: 0 0 0 3px var(--gold), 0 0 0 5px var(--brass-dark), 0 0 10px rgba(255, 214, 90, 0.6);
+  }
+  to {
+    box-shadow: 0 0 0 3px var(--gold), 0 0 0 5px var(--brass-dark), 0 0 26px rgba(255, 214, 90, 1);
+  }
 }
 
 /* Al ganar uno: salto */
@@ -624,6 +694,7 @@ canvas {
   .special .flame,
   .special .icon,
   .special .light,
+  .special.rocket.super,
   .special.gain {
     animation: none;
   }

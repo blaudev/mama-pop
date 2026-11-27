@@ -519,13 +519,50 @@ export function reachableColors(grid, start, R, width, { angles = 60, minAngle =
 
 export const ROCKET = 'rocket';
 /** Cada cuántos disparos seguidos explotando algo se gana un cohete. */
-export const ROCKET_STREAK = 3;
+export const ROCKET_STREAK = 6;
 /**
  * Alcance del cohete a cada lado de su recta, como múltiplo de R: rompe las
  * burbujas cuyo centro queda más cerca que esto. Con 2.1 abre una franja de
  * unas 3 burbujas de ancho (3 en las filas alineadas con él, 2 en las otras).
  */
 export const ROCKET_REACH = 2.1;
+
+// ── Supercohete ──────────────────────────────────────────────────────────
+// Un cohete más ancho. Se gana llenando la carga del icono del cohete:
+// SUPER_CHARGE disparos seguidos que explotan algo, sin fallar ninguno.
+
+export const SUPER_ROCKET = 'superRocket';
+/** Disparos seguidos explotando algo que llenan la carga del supercohete. */
+export const SUPER_CHARGE = 10;
+/** Alcance del supercohete (ver ROCKET_REACH): el doble de ancho, unas 5 burbujas (5 en las filas alineadas con él, 4 en las otras). */
+export const SUPER_ROCKET_REACH = 4.2;
+
+/**
+ * Carga del supercohete tras un disparo normal: sube uno si explota algo y
+ * vuelve a cero si falla. Al llegar a SUPER_CHARGE da un supercohete y empieza
+ * de nuevo.
+ *
+ * @returns {{ charge: number, full: boolean }}
+ */
+export function chargeRocket(charge, popped) {
+  if (!popped) return { charge: 0, full: false };
+  const next = (charge || 0) + 1;
+  return next >= SUPER_CHARGE ? { charge: 0, full: true } : { charge: next, full: false };
+}
+
+/** Carga leída del almacenamiento: un entero entre 0 y SUPER_CHARGE - 1. */
+export function normalizeCharge(raw) {
+  return Number.isInteger(raw) && raw > 0 && raw < SUPER_CHARGE ? raw : 0;
+}
+
+/**
+ * Qué cohete carga el botón del cohete: si ya hay uno cargado, ese (para
+ * descargarlo); si no, el supercohete si queda alguno, y si no el normal.
+ */
+export function rocketToArm(armed, inv) {
+  if (armed === ROCKET || armed === SUPER_ROCKET) return armed;
+  return inv[SUPER_ROCKET] > 0 ? SUPER_ROCKET : ROCKET;
+}
 
 /** ¿Esta racha (disparos seguidos explotando algo) da un cohete? */
 export function earnsRocket(streak) {
@@ -536,11 +573,12 @@ export function earnsRocket(streak) {
  * Recorrido recto del cohete desde `start` con ángulo `angle` (como en
  * simulateShot) hasta que sale por arriba (`topY`) o por un lado. Devuelve
  * los dos extremos y las casillas que rompe, de la más cercana a la más
- * lejana, cada una con la distancia recorrida al llegar a ella.
+ * lejana, cada una con la distancia recorrida al llegar a ella. `reach` es
+ * el ancho a cada lado de la recta, en px (el del supercohete es mayor).
  *
  * @returns {{ points: {x:number,y:number}[], cells: {row:number,col:number,dist:number}[] }}
  */
-export function rocketPath(grid, start, angle, R, width, topY) {
+export function rocketPath(grid, start, angle, R, width, topY, reach = ROCKET_REACH * R) {
   const dx = Math.cos(angle);
   const dy = -Math.sin(angle);
   // distancia hasta salir por arriba o por un lado (el cohete sale entero de la pantalla)
@@ -550,7 +588,6 @@ export function rocketPath(grid, start, angle, R, width, topY) {
   if (!Number.isFinite(len) || len < 0) len = 0;
   const end = { x: start.x + dx * len, y: start.y + dy * len };
 
-  const reach = R * ROCKET_REACH;
   const cells = [];
   for (let r = 0; r < grid.rows; r++) {
     for (let c = 0; c < grid.cols; c++) {
@@ -579,9 +616,15 @@ export function fireRocket(grid, cells, { visible = null } = {}) {
 // cuando se quiere: primero se «arman» (se cargan en el cañón) y se gastan
 // al disparar.
 
-/** Inventario con una más de `kind`. */
+/**
+ * Máximo de cada especial que se puede guardar. Así no se acumulan cientos
+ * y siguen siendo un premio que se usa, no una reserva infinita.
+ */
+export const SPECIALS_MAX = 5;
+
+/** Inventario con una más de `kind` (si no está ya en el máximo). */
 export function addSpecial(inv, kind) {
-  return { ...inv, [kind]: (inv[kind] ?? 0) + 1 };
+  return { ...inv, [kind]: Math.min((inv[kind] ?? 0) + 1, SPECIALS_MAX) };
 }
 
 /** Gasta una de `kind` si queda alguna: { inv, ok }. */
@@ -601,14 +644,16 @@ export function toggleArmed(armed, inv, kind) {
 
 /**
  * Inventario leído del almacenamiento: solo contadores enteros y positivos de
- * especiales conocidas. Cualquier otra cosa (datos viejos o rotos) se ignora.
+ * especiales conocidas, como mucho SPECIALS_MAX de cada una (las que se
+ * guardaron antes del máximo se recortan). Cualquier otra cosa (datos viejos
+ * o rotos) se ignora.
  */
 export function normalizeSpecials(raw) {
   const out = {};
   if (raw && typeof raw === 'object') {
-    for (const kind of SPECIALS) {
+    for (const kind of [...SPECIALS, SUPER_ROCKET]) {
       const n = raw[kind];
-      if (Number.isInteger(n) && n > 0) out[kind] = n;
+      if (Number.isInteger(n) && n > 0) out[kind] = Math.min(n, SPECIALS_MAX);
     }
   }
   return out;
@@ -689,18 +734,20 @@ export function placeRainbow(grid, r, c, fallback, opts = {}) {
 
 export const SPECIALS = [ROCKET, MINE, RAINBOW];
 /** Grupo que hay que romper de un disparo para ganar una mina. */
-export const MINE_GROUP = 3;
+export const MINE_GROUP = 5;
 /** Burbujas que tienen que caer a la vez para ganar una perla arcoíris. */
-export const RAINBOW_DROP = 6;
+export const RAINBOW_DROP = 10;
 
 /**
  * Especiales que gana un disparo normal: un cohete cada ROCKET_STREAK de
  * racha, una mina si rompe un grupo de MINE_GROUP o más y una perla arcoíris
- * si hace caer RAINBOW_DROP o más.
+ * si hace caer RAINBOW_DROP o más. Si además ha llenado la carga
+ * (`charged`, ver chargeRocket), el cohete es un supercohete.
  */
-export function earnedSpecials(streak, popped, dropped) {
+export function earnedSpecials(streak, popped, dropped, charged = false) {
   const out = [];
-  if (earnsRocket(streak)) out.push(ROCKET);
+  if (charged) out.push(SUPER_ROCKET);
+  else if (earnsRocket(streak)) out.push(ROCKET);
   if (popped >= MINE_GROUP) out.push(MINE);
   if (dropped >= RAINBOW_DROP) out.push(RAINBOW);
   return out;

@@ -22,6 +22,13 @@ import {
   reachableColors,
   earnsRocket,
   rocketPath,
+  SUPER_ROCKET,
+  SUPER_CHARGE,
+  SUPER_ROCKET_REACH,
+  chargeRocket,
+  normalizeCharge,
+  rocketToArm,
+  SPECIALS_MAX,
   fireRocket,
   ROCKET,
   addSpecial,
@@ -338,8 +345,8 @@ test('chooseColor evita los colores pedidos si hay otros en el tablero', () => {
 
 // ── Cohete ───────────────────────────────────────────────────────────────
 
-test('earnsRocket: se gana cada 3 disparos seguidos explotando algo', () => {
-  assert.deepEqual([0, 1, 2, 3, 4, 5, 6, 9].map(earnsRocket), [false, false, false, true, false, false, true, true]);
+test('earnsRocket: se gana cada 6 disparos seguidos explotando algo', () => {
+  assert.deepEqual([0, 1, 3, 5, 6, 7, 9, 12].map(earnsRocket), [false, false, false, false, true, false, false, true]);
 });
 
 test('rocketPath: recto hacia arriba abre una franja de unas 3 burbujas de ancho', () => {
@@ -356,6 +363,17 @@ test('rocketPath: recto hacia arriba abre una franja de unas 3 burbujas de ancho
   assert.deepEqual(cells.map((c) => c.row), [4, 4, 4, 3, 3, 2, 2, 2, 1, 1, 0, 0, 0]);
   assert.equal(Math.round(points[1].x), 50);
   assert.equal(points[1].y, -20);
+});
+
+test('rocketPath: el supercohete abre una franja más ancha que el cohete', () => {
+  const g = gridFrom(['1111111', '222222.', '3333333']);
+  const start = { x: 70, y: 200 }; // columna 3 de las filas pares
+  const normal = rocketPath(g, start, Math.PI / 2, R, 140, -20);
+  const big = rocketPath(g, start, Math.PI / 2, R, 140, -20, SUPER_ROCKET_REACH * R);
+  const cols = (shot, row) => shot.cells.filter((c) => c.row === row).map((c) => c.col).sort();
+  assert.deepEqual(cols(normal, 2), [2, 3, 4]);
+  assert.deepEqual(cols(big, 2), [1, 2, 3, 4, 5]);
+  assert.ok(big.cells.length > normal.cells.length);
 });
 
 test('rocketPath: no rebota, sale por el lado', () => {
@@ -391,6 +409,12 @@ test('addSpecial: suma una al contador sin tocar el inventario original', () => 
   assert.deepEqual(inv, {});
 });
 
+test('addSpecial: no pasa de SPECIALS_MAX', () => {
+  assert.equal(SPECIALS_MAX, 5);
+  assert.deepEqual(addSpecial({ mine: 4 }, MINE), { mine: 5 });
+  assert.deepEqual(addSpecial({ mine: 5 }, MINE), { mine: 5 });
+});
+
 test('useSpecial: gasta una si queda y no deja bajar de 0', () => {
   assert.deepEqual(useSpecial({ rocket: 2 }, ROCKET), { inv: { rocket: 1 }, ok: true });
   assert.deepEqual(useSpecial({ rocket: 0 }, ROCKET), { inv: { rocket: 0 }, ok: false });
@@ -411,6 +435,53 @@ test('normalizeSpecials: guarda solo contadores válidos de especiales conocidas
   assert.deepEqual(normalizeSpecials({ rocket: 1.5 }), {});
   assert.deepEqual(normalizeSpecials(null), {});
   assert.deepEqual(normalizeSpecials('rocket'), {});
+});
+
+test('normalizeSpecials: recorta los inventarios guardados antes del máximo', () => {
+  assert.deepEqual(normalizeSpecials({ rocket: 312, mine: 140, rainbow: 2 }), { rocket: 5, mine: 5, rainbow: 2 });
+});
+
+// ── Supercohete ──────────────────────────────────────────────────────────
+
+test('chargeRocket: sube con cada disparo que explota, vuelve a 0 al fallar', () => {
+  assert.deepEqual(chargeRocket(0, 3), { charge: 1, full: false });
+  assert.deepEqual(chargeRocket(4, 5), { charge: 5, full: false });
+  assert.deepEqual(chargeRocket(7, 0), { charge: 0, full: false }, 'un fallo la vacía');
+});
+
+test('chargeRocket: al llenarse da un supercohete y empieza de nuevo', () => {
+  assert.equal(SUPER_CHARGE, 10);
+  let charge = 0;
+  const fulls = [];
+  for (let i = 1; i <= 20; i++) {
+    const res = chargeRocket(charge, 3);
+    charge = res.charge;
+    if (res.full) fulls.push(i);
+  }
+  assert.deepEqual(fulls, [10, 20]);
+  assert.equal(charge, 0);
+});
+
+test('normalizeCharge: solo enteros entre 0 y SUPER_CHARGE - 1', () => {
+  assert.equal(normalizeCharge(7), 7);
+  assert.equal(normalizeCharge(0), 0);
+  assert.equal(normalizeCharge(10), 0);
+  assert.equal(normalizeCharge(-1), 0);
+  assert.equal(normalizeCharge('3'), 0);
+  assert.equal(normalizeCharge(null), 0);
+});
+
+test('rocketToArm: el supercohete va primero; si ya hay uno cargado, ese', () => {
+  assert.equal(rocketToArm(null, { rocket: 2 }), ROCKET);
+  assert.equal(rocketToArm(null, { rocket: 2, superRocket: 1 }), SUPER_ROCKET);
+  assert.equal(rocketToArm(null, { superRocket: 1 }), SUPER_ROCKET);
+  assert.equal(rocketToArm(ROCKET, { rocket: 1, superRocket: 1 }), ROCKET);
+  assert.equal(rocketToArm(SUPER_ROCKET, { superRocket: 1 }), SUPER_ROCKET);
+  assert.equal(rocketToArm(MINE, { superRocket: 1 }), SUPER_ROCKET);
+});
+
+test('normalizeSpecials: también guarda supercohetes', () => {
+  assert.deepEqual(normalizeSpecials({ superRocket: 2 }), { superRocket: 2 });
 });
 
 // ── Mina ─────────────────────────────────────────────────────────────────
@@ -479,12 +550,20 @@ test('placeRainbow: sin vecinas usa el color de reserva', () => {
 
 // ── Premios ──────────────────────────────────────────────────────────────
 
-test('earnedSpecials: cohete por racha, mina al explotar 3 o más, arcoíris por avalancha', () => {
+test('earnedSpecials: cohete por racha de 6, mina al explotar 5 o más, arcoíris si caen 10 o más', () => {
   assert.deepEqual(earnedSpecials(0, 0, 0), [], 'un disparo que no explota nada no da nada');
-  assert.deepEqual(earnedSpecials(1, 3, 0), [MINE], 'explotar 3 del mismo color da una mina');
-  assert.deepEqual(earnedSpecials(3, 3, 0), [ROCKET, MINE]);
-  assert.deepEqual(earnedSpecials(1, 3, 6), [MINE, RAINBOW]);
-  assert.deepEqual(earnedSpecials(6, 7, 9), [ROCKET, MINE, RAINBOW]);
+  assert.deepEqual(earnedSpecials(1, 3, 0), [], 'un grupo de 3 ya no da mina');
+  assert.deepEqual(earnedSpecials(3, 3, 0), [], 'una racha de 3 ya no da cohete');
+  assert.deepEqual(earnedSpecials(1, 5, 0), [MINE], 'explotar 5 de golpe da una mina');
+  assert.deepEqual(earnedSpecials(1, 3, 9), [], 'que caigan 9 no basta');
+  assert.deepEqual(earnedSpecials(1, 3, 10), [RAINBOW]);
+  assert.deepEqual(earnedSpecials(6, 3, 0), [ROCKET]);
+  assert.deepEqual(earnedSpecials(12, 7, 12), [ROCKET, MINE, RAINBOW]);
+});
+
+test('earnedSpecials: con la carga llena, el cohete es un supercohete', () => {
+  assert.deepEqual(earnedSpecials(4, 3, 0, true), [SUPER_ROCKET], 'sin racha de cohete, también');
+  assert.deepEqual(earnedSpecials(12, 5, 0, true), [SUPER_ROCKET, MINE], 'no da además un cohete normal');
 });
 
 test('normalizeSpecials: también guarda minas y perlas arcoíris', () => {
