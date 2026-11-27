@@ -9,7 +9,7 @@
 import {
   placeBubble,
   simulateShot,
-  colorsOnBoard,
+  colorsInView,
   colorsOf,
   isEmpty,
   neighbors,
@@ -57,7 +57,7 @@ export function playLevel(level, { seed = 1, angles = 80, maxShots = 2000 } = {}
   const pick = (queue = []) => {
     const start = { x: BOARD.shooterX, y: BOARD.shooterY + cam };
     const useful = reachableColors(grid, start, R, BOARD.width, { minAngle: BOARD.minAngle });
-    return chooseColor(colorsOnBoard(grid), colorsToAvoid(history, queue), rand, useful);
+    return chooseColor(colorsInView(grid, visibleRows(cam, BOARD.height, R)), colorsToAvoid(history, queue), rand, useful);
   };
   let current = pick();
   let next = pick([current]);
@@ -88,7 +88,7 @@ export function playLevel(level, { seed = 1, angles = 80, maxShots = 2000 } = {}
     if (isEmpty(grid)) break;
     if (bottomY(grid, R) - cam > BOARD.deathY) return { won: false, shots, reason: 'línea' };
     cam = nextCamera(cam, grid, R, BOARD.frontY, BOARD.blockPx);
-    const cs = colorsOnBoard(grid);
+    const cs = colorsInView(grid, visibleRows(cam, BOARD.height, R));
     const fired = current;
     const avoid = colorsToAvoid(history);
     const canAvoid = cs.some((c) => !avoid.includes(c));

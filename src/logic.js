@@ -203,10 +203,23 @@ export function isEmpty(grid) {
   return lowestOccupiedRow(grid) === -1;
 }
 
-export function colorsOnBoard(grid) {
+export function colorsOnBoard(grid, rows = null) {
   const set = new Set();
-  for (const row of grid.cells) for (const v of row) for (const color of colorsOf(v)) set.add(color);
+  const from = rows ? Math.max(0, rows.from) : 0;
+  const to = rows ? Math.min(grid.rows - 1, rows.to) : grid.rows - 1;
+  for (let r = from; r <= to; r++) for (const v of grid.cells[r]) for (const color of colorsOf(v)) set.add(color);
   return [...set].sort((a, b) => a - b);
+}
+
+/**
+ * Colores de los que pueden salir las bolas del lanzador: los que se ven en
+ * pantalla (filas `rows`, ver visibleRows), para no dar uno que solo está en
+ * la parte del mapa que aún no se ve. Si en pantalla no queda ninguno, los
+ * de todo el tablero.
+ */
+export function colorsInView(grid, rows) {
+  const seen = colorsOnBoard(grid, rows);
+  return seen.length ? seen : colorsOnBoard(grid);
 }
 
 // ── Anclas del mapa ──────────────────────────────────────────────────────
@@ -528,23 +541,28 @@ export const ROCKET_STREAK = 6;
 export const ROCKET_REACH = 2.1;
 
 // ── Supercohete ──────────────────────────────────────────────────────────
-// Un cohete más ancho. Se gana llenando la carga del icono del cohete:
-// SUPER_CHARGE disparos seguidos que explotan algo, sin fallar ninguno.
+// Una mejora del cohete: mientras se tiene, cada cohete que se lanza sale como
+// supercohete, más ancho. Se gana llenando la carga del icono del cohete
+// (SUPER_CHARGE disparos seguidos que explotan algo, sin fallar ninguno). No
+// se gasta al lanzar; solo se pierde si no se termina el nivel. En el
+// inventario es `superRocket: 1`.
 
 export const SUPER_ROCKET = 'superRocket';
 /** Disparos seguidos explotando algo que llenan la carga del supercohete. */
-export const SUPER_CHARGE = 10;
+export const SUPER_CHARGE = 20;
 /** Alcance del supercohete (ver ROCKET_REACH): el doble de ancho, unas 5 burbujas (5 en las filas alineadas con él, 4 en las otras). */
 export const SUPER_ROCKET_REACH = 4.2;
 
 /**
  * Carga del supercohete tras un disparo normal: sube uno si explota algo y
  * vuelve a cero si falla. Al llegar a SUPER_CHARGE da un supercohete y empieza
- * de nuevo.
+ * de nuevo. Mientras se tiene un supercohete guardado (`holding`) la carga no
+ * se mueve: ya está conseguido, no hace falta rellenarla y un fallo no lo quita.
  *
  * @returns {{ charge: number, full: boolean }}
  */
-export function chargeRocket(charge, popped) {
+export function chargeRocket(charge, popped, { holding = false } = {}) {
+  if (holding) return { charge: charge || 0, full: false };
   if (!popped) return { charge: 0, full: false };
   const next = (charge || 0) + 1;
   return next >= SUPER_CHARGE ? { charge: 0, full: true } : { charge: next, full: false };
@@ -556,12 +574,20 @@ export function normalizeCharge(raw) {
 }
 
 /**
- * Qué cohete carga el botón del cohete: si ya hay uno cargado, ese (para
- * descargarlo); si no, el supercohete si queda alguno, y si no el normal.
+ * Qué queda cargado al tocar el botón del cohete: si ya había un cohete
+ * cargado, se descarga; si no quedan cohetes, nada cambia; si quedan, se carga
+ * como supercohete si se tiene la mejora, o como cohete normal.
  */
-export function rocketToArm(armed, inv) {
-  if (armed === ROCKET || armed === SUPER_ROCKET) return armed;
+export function armRocket(armed, inv) {
+  if (armed === ROCKET || armed === SUPER_ROCKET) return null;
+  if (!(inv[ROCKET] > 0)) return armed;
   return inv[SUPER_ROCKET] > 0 ? SUPER_ROCKET : ROCKET;
+}
+
+/** Inventario sin la mejora del supercohete (al no terminar un nivel). */
+export function loseSuper(inv) {
+  const { [SUPER_ROCKET]: _, ...rest } = inv;
+  return rest;
 }
 
 /** ¿Esta racha (disparos seguidos explotando algo) da un cohete? */
@@ -622,9 +648,14 @@ export function fireRocket(grid, cells, { visible = null } = {}) {
  */
 export const SPECIALS_MAX = 5;
 
+/** Máximo que se puede guardar de `kind`: del supercohete, uno (se usa y se vuelve a cargar). */
+export function specialMax(kind) {
+  return kind === SUPER_ROCKET ? 1 : SPECIALS_MAX;
+}
+
 /** Inventario con una más de `kind` (si no está ya en el máximo). */
 export function addSpecial(inv, kind) {
-  return { ...inv, [kind]: Math.min((inv[kind] ?? 0) + 1, SPECIALS_MAX) };
+  return { ...inv, [kind]: Math.min((inv[kind] ?? 0) + 1, specialMax(kind)) };
 }
 
 /** Gasta una de `kind` si queda alguna: { inv, ok }. */
@@ -644,7 +675,7 @@ export function toggleArmed(armed, inv, kind) {
 
 /**
  * Inventario leído del almacenamiento: solo contadores enteros y positivos de
- * especiales conocidas, como mucho SPECIALS_MAX de cada una (las que se
+ * especiales conocidas, como mucho specialMax de cada una (las que se
  * guardaron antes del máximo se recortan). Cualquier otra cosa (datos viejos
  * o rotos) se ignora.
  */
@@ -653,7 +684,7 @@ export function normalizeSpecials(raw) {
   if (raw && typeof raw === 'object') {
     for (const kind of [...SPECIALS, SUPER_ROCKET]) {
       const n = raw[kind];
-      if (Number.isInteger(n) && n > 0) out[kind] = Math.min(n, SPECIALS_MAX);
+      if (Number.isInteger(n) && n > 0) out[kind] = Math.min(n, specialMax(kind));
     }
   }
   return out;

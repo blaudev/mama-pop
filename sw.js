@@ -22,6 +22,7 @@ const ASSETS = [
   './src/animals.js',
   './src/cameo.js',
   './src/dedication.js',
+  './src/dive.js',
   './src/game.js',
   './src/input.js',
   './src/launcher.js',

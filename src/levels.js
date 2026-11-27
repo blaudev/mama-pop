@@ -616,9 +616,65 @@ export const THEMES = [
     names: ['Canto', 'Krill', 'Chorro', 'Inmersión', 'Oscuridad', 'Sónar', 'Gigantes', 'Fosa', 'Silencio', 'Gran ballena'],
     maps: GENERATED_MAPS.ballena,
   },
+  {
+    key: 'payaso',
+    name: 'Pez payaso',
+    zone: 'Jardín de anémonas · mar tropical',
+    accent: '#ffb070',
+    names: ['Anémona', 'Naranja', 'Rayas', 'Escondite', 'Pececitos', 'Arrecife', 'Corales', 'Agua tibia', 'Jardín', 'Gran pez payaso'],
+    maps: GENERATED_MAPS.payaso,
+  },
+  {
+    key: 'cangrejo',
+    name: 'Cangrejo',
+    zone: 'Rocas de la orilla · mar tropical',
+    accent: '#ff8a7e',
+    names: ['Arena', 'Pinzas', 'De lado', 'Charco', 'Rocas', 'Marea baja', 'Concha', 'Espuma', 'Acantilado', 'Gran cangrejo'],
+    maps: GENERATED_MAPS.cangrejo,
+  },
+  {
+    key: 'globo',
+    name: 'Pez globo',
+    zone: 'Laguna de coral · mar tropical',
+    accent: '#ffe07a',
+    names: ['Hinchado', 'Pinchitos', 'Laguna', 'Lunares', 'Burbujón', 'Coral', 'Escondrijo', 'Remolino', 'Globo gigante', 'Gran pez globo'],
+    maps: GENERATED_MAPS.globo,
+  },
+  {
+    key: 'delfin',
+    name: 'Delfín',
+    zone: 'Olas de alta mar · mar abierto',
+    accent: '#9fd0ff',
+    names: ['Salto', 'Silbido', 'Ola', 'Manada', 'Estela', 'Piruetas', 'Juego', 'Alta mar', 'Horizonte', 'Gran delfín'],
+    maps: GENERATED_MAPS.delfin,
+  },
+  {
+    key: 'manta',
+    name: 'Manta raya',
+    zone: 'Canal de las mantas · mar abierto',
+    accent: '#a9c4ff',
+    names: ['Vuelo', 'Aletas', 'Deslizar', 'Canal', 'Sombra', 'Plancton', 'Planeo', 'Agua fría', 'Alas de mar', 'Gran manta'],
+    maps: GENERATED_MAPS.manta,
+  },
+  {
+    key: 'tiburon',
+    name: 'Tiburón',
+    zone: 'Barco hundido · mar abierto',
+    accent: '#c4dced',
+    names: ['Aleta', 'Casco', 'Proa', 'Dientes', 'Tesoro', 'Bodega', 'Mástil', 'Patrulla', 'Naufragio', 'Gran tiburón'],
+    maps: GENERATED_MAPS.tiburon,
+  },
+  {
+    key: 'rape',
+    name: 'Pez abisal',
+    zone: 'La fosa oscura · 1000–4000 m',
+    accent: '#fff6a8',
+    names: ['Farolillo', 'Penumbra', 'Destellos', 'Fosa', 'Chimenea', 'Presión', 'Luz propia', 'Negrura', 'Fondo del mar', 'Gran pez abisal'],
+    maps: GENERATED_MAPS.rape,
+  },
 ];
 
-/** Todos los niveles seguidos (temática 1 nivel 1, …, temática 5 nivel 10), con su nombre y temática. */
+/** Todos los niveles seguidos (temática 1 nivel 1, …, temática 12 nivel 10), con su nombre y temática. */
 export const LEVELS = THEMES.flatMap((theme, t) =>
   theme.maps.map((level, i) => ({ ...level, name: theme.names[i], theme: t, number: i + 1 })),
 );
@@ -715,10 +771,15 @@ export function emptyProgress() {
 /** Limpia lo que venga del almacenamiento, que puede estar roto o ser antiguo. */
 export function normalizeProgress(raw, total) {
   if (!raw || typeof raw !== 'object') return emptyProgress();
-  const unlocked = Number.isInteger(raw.unlocked) ? Math.min(Math.max(raw.unlocked, 1), total) : 1;
   const stars = Array.isArray(raw.stars)
     ? raw.stars.slice(0, total).map((s) => (Number.isInteger(s) ? Math.min(Math.max(s, 0), 3) : 0))
     : [];
+  // Siempre abierto el nivel que va después del último ganado: al añadir
+  // temáticas, quien lo tenía todo ganado (con `unlocked` en el tope de antes)
+  // sigue por la primera nueva.
+  const lastWon = stars.findLastIndex((s) => s > 0);
+  const saved = Number.isInteger(raw.unlocked) ? raw.unlocked : 1;
+  const unlocked = Math.min(Math.max(saved, lastWon + 2, 1), total);
   return { unlocked, stars };
 }
 

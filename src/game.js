@@ -1,7 +1,7 @@
 import {
   placeBubble,
   isEmpty,
-  colorsOnBoard,
+  colorsInView,
   bubblesLeft,
   cellCenter,
   rowHeight,
@@ -20,7 +20,8 @@ import {
   SUPER_CHARGE,
   chargeRocket,
   normalizeCharge,
-  rocketToArm,
+  armRocket,
+  loseSuper,
   rocketPath,
   fireRocket,
   addSpecial,
@@ -49,6 +50,7 @@ import {
 import { launcherLayout, launcherPositions, hitsLauncher, inCancelZone, readyToShoot } from './launcher.js';
 import { BOARD, LEVELS, THEMES, LEVELS_PER_THEME, themeOf, themeProgress, isDevHost, parseMap, starsFor, shotsForStars, normalizeProgress, recordWin } from './levels.js';
 import { THEME_ART, animalSvg } from './animals.js';
+import { startDiveSea, divePos, divePath, mix } from './dive.js';
 import { DEDICATION, MOM_SVG, CLOUD_SVG, HANDSOME_SVG, WINE_SVG } from './dedication.js';
 import { isDeliberateShot } from './input.js';
 import { CAMEO_EVERY, CAMEO_FIRST, makeCameo, cameoPose } from './cameo.js';
@@ -225,7 +227,7 @@ const sfx = (() => {
    * Ruido grave con cuerpo: paso bajo que se cierra de `from` a `to` Hz,
    * saturado. Es el rugido de un cohete o el estruendo de una explosión.
    */
-  function roar({ from = 1800, to = 400, dur = 1.4, vol = 0.3, attack = 0.02, delay = 0, reverb = 0.8 } = {}) {
+  function roar({ from = 1800, to = 400, dur = 1.4, vol = 0.3, attack = 0.02, delay = 0, reverb = 0.8, drive = true } = {}) {
     if (!ready()) return;
     const t = ctx.currentTime + delay;
     const src = ctx.createBufferSource();
@@ -236,11 +238,14 @@ const sfx = (() => {
     lp.Q.value = 0.7;
     lp.frequency.setValueAtTime(from, t);
     lp.frequency.exponentialRampToValueAtTime(to, t + dur);
-    const sh = ctx.createWaveShaper();
-    sh.curve = driveCurve();
     const g = ctx.createGain();
     env(g, t, vol, attack, dur);
-    src.connect(lp).connect(sh).connect(g).connect(out);
+    if (drive) {
+      const sh = ctx.createWaveShaper();
+      sh.curve = driveCurve();
+      src.connect(lp).connect(sh).connect(g);
+    } else src.connect(lp).connect(g);
+    g.connect(out);
     if (reverb) {
       const send = ctx.createGain();
       send.gain.value = reverb;
@@ -437,10 +442,19 @@ const sfx = (() => {
       });
     },
     /** Explosión de la mina: golpe grave y estruendo que se apaga. */
+    /**
+     * Explosión de la mina bajo el agua: un golpe seco, un «bum» hondo y
+     * apagado (ruido grave sin saturar, que se va cerrando) y un burbujeo
+     * que sube al final.
+     */
     boom: () => {
-      thump({ from: 150, to: 28, vol: 0.55, dur: 0.6 });
-      roar({ from: 3200, to: 160, dur: 1.1, vol: 0.4, attack: 0.005, reverb: 1.3 });
-      hiss({ from: 6000, to: 1500, dur: 0.12, vol: 0.12, q: 0.5 });
+      hiss({ from: 2200, to: 500, dur: 0.07, vol: 0.09, q: 0.6 });
+      thump({ from: 120, to: 32, vol: 0.6, dur: 0.75 });
+      roar({ from: 1100, to: 60, dur: 1.4, vol: 0.55, attack: 0.008, reverb: 1.4, drive: false });
+      for (let i = 0; i < 7; i++) {
+        const f = 260 + Math.random() * 380;
+        voice(f, { to: f * 2, glide: 0.05, vol: 0.035, decay: 0.07, delay: 0.25 + i * 0.07 + Math.random() * 0.05, reverb: 0.6 });
+      }
     },
     /** Destello de la perla arcoíris al pegarse. */
     sparkle: () => [12, 14, 16, 19].forEach((n, i) => bell(note(n), { vol: 0.045, delay: i * 0.05, decay: 0.5 })),
@@ -551,15 +565,18 @@ function hexA(hex, a) {
 const ANCHOR_TONE = { base: '#9fb4c8', light: '#e6f3ff', dark: '#3c4f63' };
 // Humo del despegue del cohete.
 const SMOKE_TONE = { base: '#d9e4ef', light: '#ffffff', dark: '#7d8fa3' };
-// Concha de las burbujas de dos golpes, mientras siguen tapadas.
-const SHELL_TONE = { base: '#c9bfae', light: '#f4efe6', dark: '#6f6656' };
+// Burbujas de dos golpes, mientras siguen tapadas: perla misteriosa de nácar.
+const SHELL_TONE = { base: '#7c6bb8', light: '#efe6ff', dark: '#2f2560' };
 function toneOf(v) {
   if (isAnchor(v)) return ANCHOR_TONE;
   if (isShell(v)) return SHELL_TONE;
   return COLORS[colorsOf(v)[0]];
 }
 
-/** Burbuja de dos golpes tapada: una concha de color arena con sus estrías, sin pista de su color. */
+/**
+ * Burbuja de dos golpes tapada: una perla de nácar morada con reflejos de
+ * colores y un «?» en el centro, sin pista de su color.
+ */
 const shellSprite = (() => {
   const size = Math.ceil((R * 2 + 4) * DPR);
   const c = document.createElement('canvas');
@@ -568,9 +585,9 @@ const shellSprite = (() => {
   g.scale(DPR, DPR);
   const cx = R + 2;
   const r = R - BUBBLE_GAP;
-  const body = g.createRadialGradient(cx - r * 0.3, cx - r * 0.35, r * 0.1, cx, cx, r);
+  const body = g.createRadialGradient(cx - r * 0.2, cx - r * 0.25, r * 0.05, cx, cx, r);
   body.addColorStop(0, SHELL_TONE.light);
-  body.addColorStop(0.55, SHELL_TONE.base);
+  body.addColorStop(0.45, SHELL_TONE.base);
   body.addColorStop(1, SHELL_TONE.dark);
   g.save();
   g.beginPath();
@@ -578,17 +595,46 @@ const shellSprite = (() => {
   g.fillStyle = body;
   g.fill();
   g.clip();
-  // estrías en abanico desde abajo, como una concha de almeja
-  g.strokeStyle = 'rgba(90,78,60,0.45)';
-  g.lineWidth = 1.3;
-  for (let i = -2; i <= 2; i++) {
+  // reflejos de nácar: tres arcos suaves de colores que rodean la perla
+  g.lineWidth = r * 0.22;
+  g.lineCap = 'round';
+  [
+    ['rgba(255,150,220,0.45)', -2.6, -1.4],
+    ['rgba(120,230,255,0.4)', -0.9, 0.5],
+    ['rgba(255,236,150,0.35)', 1.1, 2.3],
+  ].forEach(([color, a0, a1]) => {
+    g.strokeStyle = color;
     g.beginPath();
-    g.moveTo(cx, cx + r * 0.85);
-    g.quadraticCurveTo(cx + i * r * 0.45, cx, cx + i * r * 0.32, cx - r);
+    g.arc(cx, cx, r * 0.78, a0, a1);
     g.stroke();
-  }
+  });
+  // sombra abajo y brillo arriba a la izquierda, como las demás
+  const shade = g.createLinearGradient(0, cx - r, 0, cx + r);
+  shade.addColorStop(0.55, 'rgba(0,0,0,0)');
+  shade.addColorStop(1, 'rgba(0,0,0,0.25)');
+  g.fillStyle = shade;
+  g.fillRect(0, 0, cx * 2, cx * 2);
+  const hx = cx - r * 0.32;
+  const hy = cx - r * 0.4;
+  const halo = g.createRadialGradient(hx, hy, 0, hx, hy, r * 0.5);
+  halo.addColorStop(0, 'rgba(255,255,255,0.85)');
+  halo.addColorStop(0.4, 'rgba(255,255,255,0.25)');
+  halo.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = halo;
+  g.fillRect(0, 0, cx * 2, cx * 2);
   g.restore();
-  g.strokeStyle = 'rgba(255,255,255,0.45)';
+  // el «?»: blanco con un borde oscuro, para que se lea bien
+  g.font = `800 ${Math.round(r * 1.25)}px "Baloo 2", system-ui, sans-serif`;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.lineWidth = 3;
+  g.lineJoin = 'round';
+  g.strokeStyle = 'rgba(40,24,90,0.85)';
+  g.strokeText('?', cx, cx + r * 0.08);
+  g.fillStyle = '#ffffff';
+  g.fillText('?', cx, cx + r * 0.08);
+  // contorno fino brillante
+  g.strokeStyle = 'rgba(255,255,255,0.55)';
   g.lineWidth = 1;
   g.beginPath();
   g.arc(cx, cx, r - 0.5, 0, Math.PI * 2);
@@ -669,21 +715,28 @@ function drawBubble(ctx, x, y, color, scale = 1, alpha = 1) {
   if (isShell(color)) {
     ctx.drawImage(shellSprite, x - s, y - s, s * 2, s * 2);
   } else if (isBicolor(color)) {
-    // mitad y mitad: un color a la izquierda, el otro a la derecha, con una raya blanca en medio
+    // mitad y mitad en diagonal: un color arriba a la izquierda, el otro abajo a
+    // la derecha, con una raya blanca en medio
     const [a, b] = colorsOf(color);
-    for (const [tone, from] of [[a, -s], [b, 0]]) {
+    const halves = [
+      [a, [[-s, -s], [s, -s], [-s, s]]],
+      [b, [[s, -s], [s, s], [-s, s]]],
+    ];
+    for (const [tone, pts] of halves) {
       ctx.save();
       ctx.beginPath();
-      ctx.rect(x + from, y - s, s, s * 2);
+      pts.forEach(([px, py], i) => (i ? ctx.lineTo(x + px, y + py) : ctx.moveTo(x + px, y + py)));
+      ctx.closePath();
       ctx.clip();
       ctx.drawImage(sprites[tone], x - s, y - s, s * 2, s * 2);
       ctx.restore();
     }
+    const d = (R - BUBBLE_GAP) * scale * Math.SQRT1_2;
     ctx.strokeStyle = 'rgba(255,255,255,0.85)';
     ctx.lineWidth = 1.5 * scale;
     ctx.beginPath();
-    ctx.moveTo(x, y - (R - BUBBLE_GAP) * scale);
-    ctx.lineTo(x, y + (R - BUBBLE_GAP) * scale);
+    ctx.moveTo(x + d, y - d);
+    ctx.lineTo(x - d, y + d);
     ctx.stroke();
   } else {
     ctx.drawImage(sprites[color], x - s, y - s, s * 2, s * 2);
@@ -755,13 +808,19 @@ const state = {
 
 const rand = (n) => Math.floor(Math.random() * n);
 
+/** Colores que se verán en pantalla después de la jugada (ver colorsInView). */
+function colorsInPlay() {
+  const cam = nextCamera(state.pendingCam ?? state.camTarget, state.grid, R, FRONT_Y, BLOCK_PX);
+  return colorsInView(state.grid, visibleRows(cam, H, R));
+}
+
 /**
- * Nueva bola: un color del tablero, sin repetir sin sentido (ver
+ * Nueva bola: un color de los que se ven en pantalla (ver colorsInPlay), sin repetir sin sentido (ver
  * colorsToAvoid) y casi siempre de los que pueden explotar algo desde el
  * lanzador, con el mapa donde va a quedar la cámara (ver reachableColors).
  */
 function pickColor(queue = []) {
-  const onBoard = colorsOnBoard(state.grid);
+  const onBoard = colorsInPlay();
   if (!onBoard.length) return rand(COLORS.length);
   const cam = nextCamera(state.pendingCam ?? state.camTarget, state.grid, R, FRONT_Y, BLOCK_PX);
   const useful = reachableColors(state.grid, { x: SHOOTER.x, y: SHOOTER.y + cam }, R, W, { minAngle: MIN_ANGLE });
@@ -774,7 +833,7 @@ function pickColor(queue = []) {
  * cañón no puede ser otra igual. Si hay que cambiar alguna, se ve un «pop».
  */
 function ensureColorsValid() {
-  const onBoard = colorsOnBoard(state.grid);
+  const onBoard = colorsInPlay();
   if (!onBoard.length) return;
   const avoid = colorsToAvoid(state.history);
   const canAvoid = onBoard.some((c) => !avoid.includes(c));
@@ -801,6 +860,7 @@ function startLevel(index) {
   state.projectile = null;
   state.aimCache = null;
   state.armed = null; // las guardadas se conservan: pasan de un mapa a otro
+  state.inLevel = true; // hasta terminarlo o perderlo (ver forfeitSuper)
   state.cameo = null;
   state.cameoIn = randIn(CAMEO_FIRST);
 
@@ -872,9 +932,9 @@ function updateSpecials(gained = null) {
     const { name, btn, count } = ui.specials[kind];
     const n = state.specials[kind] ?? 0;
     const armed = state.armed === kind;
-    // el botón del cohete lleva también los supercohetes y la carga que los da
+    // el botón del cohete lleva también la mejora del supercohete y la carga que la da
     const supers = kind === ROCKET ? state.specials[SUPER_ROCKET] ?? 0 : 0;
-    const total = n + supers;
+    const total = n;
     const pressed = armed || (kind === ROCKET && state.armed === SUPER_ROCKET);
     count.textContent = total;
     btn.disabled = total === 0 && !pressed;
@@ -882,9 +942,11 @@ function updateSpecials(gained = null) {
     let label = `${name}: ${total === 1 ? 'queda 1' : `quedan ${total}`}`;
     if (kind === ROCKET) {
       btn.classList.toggle('super', supers > 0);
-      btn.style.setProperty('--charge', String(state.charge / SUPER_CHARGE));
-      ui.charge.textContent = `${state.charge}/${SUPER_CHARGE}`;
-      if (supers) label += ` (${supers === 1 ? '1 supercohete' : `${supers} supercohetes`})`;
+      // con un supercohete guardado, la carga se queda llena hasta que se use
+      const shown = supers ? SUPER_CHARGE : state.charge;
+      btn.style.setProperty('--charge', String(shown / SUPER_CHARGE));
+      ui.charge.textContent = `${shown}/${SUPER_CHARGE}`;
+      if (supers) label += ', salen como supercohete';
       label += `. Supercohete: ${state.charge} de ${SUPER_CHARGE}`;
     }
     btn.setAttribute('aria-label', `${label}${pressed ? ', cargado' : ''}`);
@@ -900,8 +962,8 @@ function updateSpecials(gained = null) {
 function toggleSpecial(kind) {
   if (!['playing', 'flying', 'scrolling'].includes(state.mode)) return;
   const before = state.armed;
-  if (kind === ROCKET) kind = rocketToArm(state.armed, state.specials); // el supercohete va primero
-  state.armed = toggleArmed(state.armed, state.specials, kind);
+  // el cohete sale como supercohete si se tiene la mejora
+  state.armed = kind === ROCKET ? armRocket(state.armed, state.specials) : toggleArmed(state.armed, state.specials, kind);
   if (state.armed !== before) sfx.arm(state.armed != null);
   updateSpecials();
 }
@@ -914,6 +976,7 @@ function award(kind, i = 0) {
   const before = state.specials[kind] ?? 0;
   state.specials = addSpecial(state.specials, kind);
   if ((state.specials[kind] ?? 0) === before) return; // ya tiene el máximo: no hay premio
+  if (kind === SUPER_ROCKET) state.specials = addSpecial(state.specials, ROCKET); // y un cohete para estrenarlo
   state.effects.push({ type: 'text', x: W / 2, y: state.cam + H * (0.6 + 0.07 * i), text: AWARD_TEXT[kind], t: 0, life: 1.2, big: true });
   updateSpecials(kind);
   sfx.gain();
@@ -963,9 +1026,10 @@ function hideOverlay() {
 // ── Pantallas de temáticas y niveles ─────────────────────────────────────
 
 const esc = (t) => String(t).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]);
+const CHECK = '<svg class="check" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
 const LOCK = '<svg class="lock" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>';
 
-/** Enseña una pantalla completa (lista de temáticas o camino de niveles) en el overlay. */
+/** Enseña una pantalla completa (mapa de animales o camino de niveles) en el overlay. */
 function showScreen(html, background) {
   ui.card.hidden = true;
   ui.screen.hidden = false;
@@ -984,7 +1048,8 @@ function showScreen(html, background) {
       else if (action === 'play') showMenu();
     }),
   );
-  setTimeout(() => ui.screen.querySelector('[data-focus], button:not(:disabled)')?.focus(), 50);
+  // primero el marcado con data-focus, esté donde esté; si no hay, el primer botón
+  setTimeout(() => (ui.screen.querySelector('[data-focus]') ?? ui.screen.querySelector('button:not(:disabled)'))?.focus(), 50);
 }
 
 /** Temática que toca: la primera sin completar que esté abierta. */
@@ -993,36 +1058,104 @@ function currentTheme() {
   return t === -1 ? THEMES.length - 1 : t;
 }
 
-/** Lista de las temáticas. */
+// Mapa de animales («Inmersión»): un camino que baja hacia lo hondo con una
+// parada por animal. Grupos de animales, con un cartel donde empieza cada uno.
+const DIVE_GROUPS = [
+  [5, 'Mar tropical'],
+  [8, 'Mar abierto'],
+  [11, 'La fosa'],
+];
+/** Desde qué animal son nuevos (llevan la etiqueta «¡NUEVO!» hasta completarlos). */
+const NEW_FROM = 5;
+
+/** Mapa de los animales. */
 function showMenu() {
   state.mode = 'menu';
   state.projectile = null;
   const cur = currentTheme();
   const total = THEMES.reduce((n, _, t) => n + progressOf(t).stars, 0);
-  const cards = THEMES.map((theme, t) => {
-    const tp = progressOf(t);
-    const done = tp.best.filter(Boolean).length;
-    const state_ = !tp.unlocked ? 'locked' : tp.completed ? 'done' : 'open';
-    const label = `${theme.name}: ${!tp.unlocked ? 'bloqueada' : `${done} de ${LEVELS_PER_THEME} niveles, ${tp.stars} estrellas`}`;
-    return `<button type="button" class="theme-card ${state_}${t === cur ? ' current' : ''}" data-action="theme" data-arg="${t}"
-        ${tp.unlocked ? '' : 'disabled'} aria-label="${esc(label)}" ${t === cur ? 'data-focus' : ''} style="--accent:${theme.accent}; background:${THEME_ART[theme.key].bg}">
-      <span class="animal">${animalSvg(theme.key, theme.name)}</span>
-      <span class="info">
-        <span class="name">${esc(theme.name)}</span>
-        <span class="zone">${esc(theme.zone)}</span>
-        <span class="bar"><span style="width:${done * 10}%"></span></span>
-      </span>
-      <span class="side">${tp.unlocked ? `<span class="stars">★ ${tp.stars}/30</span>` : LOCK}</span>
-    </button>`;
-  }).join('');
+  const focus = state.menuTheme ?? cur;
+  const curTheme = THEMES[cur];
+  const curTp = progressOf(cur);
+  // El foco va al botón de abajo, que no se mueve: si fuera a un animal, el scroll saltaría hasta él.
+  const play = curTp.next == null
+    ? `<button type="button" class="btn" data-action="theme" data-arg="${cur}" data-focus>Ver ${esc(curTheme.name)}</button>`
+    : `<button type="button" class="btn" data-action="level" data-arg="${cur * LEVELS_PER_THEME + curTp.next}" data-focus>Seguir: ${esc(curTheme.name)}<small>Nivel ${curTp.next + 1} de ${LEVELS_PER_THEME}</small></button>`;
   showScreen(
-    `<div class="themes">
-      <header class="screen-head"><h1>Temáticas</h1><span class="pill">★ ${total}/${THEMES.length * 30}</span></header>
-      <div class="theme-list">${cards}</div>
-      <button type="button" class="btn btn-secondary help-btn" data-action="help">Cómo se juega</button>
+    `<div class="dive">
+      <canvas class="dive-sea" aria-hidden="true"></canvas>
+      <div class="dive-scroll"><div class="dive-world"></div></div>
+      <header class="screen-head dive-head">
+        <h1>Animales</h1>
+        <span class="pill">★ ${total}/${THEMES.length * 30}</span>
+        <button type="button" class="icon-btn" data-action="help" aria-label="Cómo se juega">?</button>
+      </header>
+      <div class="dive-foot">
+        <button type="button" class="icon-btn dive-here" aria-label="Ir al animal de ahora">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.4" fill="currentColor"/></svg>
+        </button>
+        ${play}
+      </div>
     </div>`,
-    'linear-gradient(180deg, rgba(13,93,134,0.92), rgba(4,23,58,0.96))',
+    '#0a3d6c',
   );
+
+  const root = ui.screen.querySelector('.dive');
+  const scroller = root.querySelector('.dive-scroll');
+  const world = root.querySelector('.dive-world');
+  // Un solo objeto, que se actualiza al cambiar el ancho: el fondo animado lo lee en cada fotograma.
+  const layout = { gap: 0, top: 0, height: 0 };
+  const render = () => {
+    const w = scroller.clientWidth;
+    const gap = Math.round(w * 0.62);
+    const top = Math.round(gap * 0.95);
+    Object.assign(layout, { gap, top, height: top + (THEMES.length - 1) * gap + Math.round(gap * 1.4) });
+    world.style.height = `${layout.height}px`;
+    const stops = THEMES.map((theme, t) => {
+      const tp = progressOf(t);
+      const status = !tp.unlocked ? 'locked' : t === cur && !tp.completed ? 'current' : tp.completed ? 'done' : 'open';
+      const p = divePos(t, layout);
+      const water = THEME_ART[theme.key].water;
+      const label = !tp.unlocked ? `Animal ${t + 1}: bloqueado` : `${theme.name}: ${tp.best.filter(Boolean).length} de ${LEVELS_PER_THEME} niveles, ${tp.stars} estrellas`;
+      const isNew = t >= NEW_FROM && tp.unlocked && !tp.completed;
+      return `<div class="dive-stop ${status}" style="left:${p.x * 100}%; top:${p.y}px; --water:${water}; --water-light:${mix(water, '#ffffff', 0.35)}">
+        <button type="button" class="medal" data-action="theme" data-arg="${t}" ${tp.unlocked ? '' : 'disabled'} aria-label="${esc(label)}">
+          ${isNew ? '<span class="new-tag">¡NUEVO!</span>' : ''}
+          ${animalSvg(theme.key, tp.unlocked ? theme.name : 'Animal sorpresa')}
+          <span class="num">${t + 1}</span>
+          ${status === 'current' ? '' : `<span class="badge">${status === 'done' ? CHECK : status === 'locked' ? LOCK : ''}</span>`}
+        </button>
+        <span class="dive-label"><span class="name">${tp.unlocked ? esc(theme.name) : '???'}</span>${tp.unlocked ? `<span class="stars">★ ${tp.stars}/30</span>` : ''}</span>
+      </div>`;
+    }).join('');
+    const signs = DIVE_GROUPS.filter(([t]) => t < THEMES.length).map(([t, name]) => {
+      const mid = (divePos(t - 1, layout).x + divePos(t, layout).x) / 2;
+      return `<span class="dive-sign" style="left:${mid > 0.5 ? 26 : 74}%; top:${layout.top + (t - 0.5) * gap}px">· ${esc(name)} ·</span>`;
+    }).join('');
+    world.innerHTML = `<svg class="dive-route" viewBox="0 0 ${w} ${layout.height}" preserveAspectRatio="none" aria-hidden="true">
+        <path class="path-all" d="${divePath(THEMES.length, w, layout)}"/>
+        ${cur > 0 ? `<path class="path-done" d="${divePath(cur + 1, w, layout)}"/>` : ''}
+      </svg>${signs}${stops}`;
+    world.querySelectorAll('[data-action="theme"]').forEach((el) =>
+      el.addEventListener('click', () => {
+        sfx.ensure();
+        showTheme(Number(el.dataset.arg));
+      }),
+    );
+  };
+  const goTo = (t, smooth) => scroller.scrollTo({ top: divePos(t, layout).y - scroller.clientHeight * 0.45, behavior: smooth ? 'smooth' : 'auto' });
+  root.querySelector('.dive-here').addEventListener('click', () => goTo(cur, true));
+  // La pantalla aún puede no tener tamaño: se pinta (y se baja hasta el animal) cuando lo tenga.
+  let placed = false;
+  new ResizeObserver(() => {
+    if (!scroller.clientWidth) return;
+    const k = scroller.scrollTop / Math.max(1, layout.height);
+    render();
+    if (placed) scroller.scrollTop = k * layout.height;
+    else goTo(focus, false);
+    placed = true;
+  }).observe(scroller);
+  startDiveSea(root.querySelector('.dive-sea'), scroller, THEMES.map((th) => THEME_ART[th.key].water), layout);
 }
 
 // Camino de los 10 niveles: posiciones en coordenadas del tablero (378 × 680).
@@ -1035,6 +1168,7 @@ const PATH = Array.from({ length: LEVELS_PER_THEME }, (_, i) => ({
 function showTheme(t) {
   state.mode = 'menu';
   state.projectile = null;
+  state.menuTheme = t;
   const theme = THEMES[t];
   const tp = progressOf(t);
   const first = t * LEVELS_PER_THEME;
@@ -1058,7 +1192,7 @@ function showTheme(t) {
   if (tp.completed && t < THEMES.length - 1) {
     foot = `<button type="button" class="btn" data-action="theme" data-arg="${t + 1}">¡Completada! Siguiente: ${esc(THEMES[t + 1].name)} →</button>`;
   } else if (tp.completed) {
-    foot = `<button type="button" class="btn" data-action="themes">¡Todas completadas! Ver temáticas</button>`;
+    foot = `<button type="button" class="btn" data-action="themes">¡Todos completados! Ver animales</button>`;
   } else if (tp.next != null) {
     const level = LEVELS[first + tp.next];
     foot = `<button type="button" class="btn" data-action="level" data-arg="${first + tp.next}">Jugar nivel ${tp.next + 1} · ${esc(level.name)}</button>`;
@@ -1071,10 +1205,10 @@ function showTheme(t) {
   showScreen(
     `<div class="theme-screen" style="--accent:${theme.accent}">
       <header class="screen-head">
-        <button type="button" class="icon-btn back" data-action="themes" aria-label="Volver a las temáticas">
+        <button type="button" class="icon-btn back" data-action="themes" aria-label="Volver a los animales">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
         </button>
-        <span class="title"><span class="kicker">TEMÁTICA ${t + 1} DE ${THEMES.length}</span><span class="name">${esc(theme.name)}</span></span>
+        <span class="title"><span class="kicker">ANIMAL ${t + 1} DE ${THEMES.length}</span><span class="name">${esc(theme.name)}</span></span>
         <span class="pill">★ ${tp.stars}/30</span>
       </header>
       <div class="hero${tp.unlocked ? '' : ' dim'}">${animalSvg(theme.key, theme.name)}</div>
@@ -1170,7 +1304,7 @@ function rocketReach(kind) {
 }
 
 function shootRocket(kind) {
-  const used = useSpecial(state.specials, kind);
+  const used = useSpecial(state.specials, ROCKET); // el supercohete es una mejora: gasta un cohete normal
   if (!used.ok) return;
   state.specials = used.inv;
   state.armed = null;
@@ -1352,10 +1486,11 @@ function land(p) {
   let res;
   if (p.special === MINE) {
     res = placeMine(state.grid, row, col, { visible: inView() });
-    state.effects.push({ type: 'blast', x: at.x, y: at.y, t: 0, life: 0.45 });
-    burst(at.x, at.y, { base: '#ff8c3a', light: '#ffe08a' }, { n: 34, speed: 420, size: 4, life: 0.7 });
-    flash(0.35, '255,200,140');
-    state.shake = Math.max(state.shake, 0.22);
+    state.effects.push({ type: 'blast', x: at.x, y: at.y, t: 0, life: 0.55 });
+    burst(at.x, at.y, { base: '#ff8c3a', light: '#ffe08a' }, { n: 44, speed: 480, size: 4.5, life: 0.75 });
+    smoke(at.x, at.y);
+    flash(0.45, '255,200,140');
+    state.shake = Math.max(state.shake, 0.35);
     sfx.boom();
   } else if (p.special === RAINBOW) {
     res = placeRainbow(state.grid, row, col, pickColor(), { visible: inView() });
@@ -1420,7 +1555,7 @@ function land(p) {
     // cohete por racha, mina por grupo grande, perla arcoíris por avalancha.
     // La carga del supercohete sube con cada perla normal que explota algo.
     if (!p.special) {
-      const charged = chargeRocket(state.charge, res.popped.length);
+      const charged = chargeRocket(state.charge, res.popped.length, { holding: state.specials[SUPER_ROCKET] > 0 });
       state.charge = charged.charge;
       earnedSpecials(state.streak, res.popped.length, res.dropped.length, charged.full).forEach((kind, i) => award(kind, i));
       updateSpecials();
@@ -1429,7 +1564,7 @@ function land(p) {
     sfx.stick();
     state.streak = 0;
     // un fallo vacía la carga del supercohete
-    if (!p.special && state.charge) {
+    if (!p.special && state.charge && !(state.specials[SUPER_ROCKET] > 0)) {
       state.charge = 0;
       updateSpecials();
     }
@@ -1451,6 +1586,7 @@ function settle() {
     state.progress = recordWin(state.progress, index, stars, LEVELS.length);
     store.set(PROGRESS_KEY, state.progress);
     state.mode = 'cleared';
+    state.inLevel = false; // terminado: la mejora del supercohete se conserva
     sfx.win();
     confetti();
     flash(0.35, '255,240,200', 0.6);
@@ -1460,7 +1596,7 @@ function settle() {
     setTimeout(() => {
       if (state.mode !== 'cleared' || state.levelIndex !== index) return; // ya se ha ido a otra pantalla
       showOverlay({
-        title: isLast ? '¡Todas las temáticas completadas!' : endsTheme ? `¡${THEMES[t].name} completada!` : '¡Nivel completado!',
+        title: isLast ? '¡Todos los animales completados!' : endsTheme ? `¡${THEMES[t].name} completada!` : '¡Nivel completado!',
         text:
           `<span class="big-stars" aria-label="${stars} de 3 estrellas">${starText(stars)}</span>` +
           `<strong>${state.shots}</strong> ${state.shots === 1 ? 'disparo' : 'disparos'} · <strong>${state.score}</strong> puntos` +
@@ -1504,9 +1640,19 @@ function applyPendingCamera() {
   sfx.scroll();
 }
 
+/** Nivel sin terminar (perdido o abandonado): se pierde la mejora del supercohete. */
+function forfeitSuper() {
+  state.inLevel = false;
+  if (!(state.specials[SUPER_ROCKET] > 0)) return;
+  state.specials = loseSuper(state.specials);
+  state.charge = 0;
+  updateSpecials();
+}
+
 function checkLose() {
   const crossed = bottomY(state.grid, R) - state.camTarget > DEATH_Y;
   if (!crossed && shotsLeft() > 0) return false;
+  forfeitSuper();
   state.mode = 'over';
   state.shake = 0.4;
   sfx.lose();
@@ -1573,6 +1719,29 @@ function burst(x, y, tone, { n = 9, speed = 260, size = 3.2, life = 0.55, gravit
       gravity,
       t: -delay,
       life: life * (0.7 + Math.random() * 0.6),
+    });
+  }
+}
+
+/**
+ * Humo de una explosión: bocanadas grises que salen del centro, se hinchan,
+ * suben despacio y se desvanecen.
+ */
+function smoke(x, y, n = 14) {
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 + Math.random() * 0.5;
+    const v = 40 + Math.random() * 90;
+    state.effects.push({
+      type: 'smoke',
+      x: x + Math.cos(a) * R * 0.8,
+      y: y + Math.sin(a) * R * 0.8,
+      vx: Math.cos(a) * v,
+      vy: Math.sin(a) * v - 30,
+      size: R * (0.7 + Math.random() * 0.6),
+      grow: R * (1.6 + Math.random() * 1.2),
+      shade: 170 + Math.floor(Math.random() * 60),
+      t: -Math.random() * 0.08,
+      life: 1.1 + Math.random() * 0.6,
     });
   }
 }
@@ -1649,6 +1818,12 @@ function update(dt) {
     if (e.type === 'spark' && e.t > 0) {
       e.vx *= 1 - 1.5 * dt;
       e.vy += e.gravity * dt;
+      e.x += e.vx * dt;
+      e.y += e.vy * dt;
+    }
+    if (e.type === 'smoke' && e.t > 0) {
+      e.vx *= 1 - 2.2 * dt; // el agua lo frena
+      e.vy = e.vy * (1 - 2.2 * dt) - 26 * dt; // y sube despacio
       e.x += e.vx * dt;
       e.y += e.vy * dt;
     }
@@ -1782,6 +1957,140 @@ const SCENES = {
       d.fill('M0 690 C 50 664, 110 676, 160 690 C 220 706, 280 680, 330 672 C 360 668, 380 676, 390 682 L 390 844 L 0 844 Z', '#040e22');
       d.fill('M0 760 C 40 740, 70 750, 96 772 L 96 844 L 0 844 Z', '#02081a');
       d.fill('M390 740 C 350 724, 320 740, 300 770 L 300 844 L 390 844 Z', '#02081a');
+    },
+  },
+  payaso: {
+    water: ['#3fd6d8', '#1fb0c4', '#1586aa', '#0f6288', '#0a4466'],
+    sun: 0.6,
+    rays: 1.1,
+    mote: '#fff2e0',
+    decor: (d) => {
+      // jardín de anémonas sobre arena clara, con abanicos de coral
+      d.fill('M0 704 C 90 688, 200 702, 280 694 S 360 688, 390 696 V844 H0Z', '#e2c98e');
+      d.fill('M0 750 C 110 736, 250 748, 390 738 V844 H0Z', '#ceb177');
+      const anemone = (x, y, s, color, dark) => {
+        for (let k = -4; k <= 4; k++) d.stroke(`M${x + k * 4 * s} ${y} C ${x + k * 5 * s} ${y - 14 * s}, ${x + k * 7 * s} ${y - 22 * s}, ${x + k * 6 * s} ${y - (30 - Math.abs(k) * 2) * s}`, color, 5 * s);
+        d.fill(`M${x - 22 * s} ${y + 4} C ${x - 20 * s} ${y - 8 * s}, ${x + 20 * s} ${y - 8 * s}, ${x + 22 * s} ${y + 4} Z`, dark);
+      };
+      anemone(70, 716, 1.2, '#ff8fbd', '#b84a7c');
+      anemone(318, 712, 1, '#ffa6cc', '#b84a7c');
+      anemone(190, 742, 0.8, '#ff9e6b', '#b8583a');
+      const fan = (x, y, color) => {
+        d.fill(`M${x} ${y} C ${x - 40} ${y - 30}, ${x - 30} ${y - 80}, ${x} ${y - 86} C ${x + 30} ${y - 80}, ${x + 40} ${y - 30}, ${x} ${y} Z`, color, 0.85);
+        for (const k of [-24, -12, 0, 12, 24]) d.stroke(`M${x} ${y} L${x + k} ${y - 76}`, '#00000033', 2);
+      };
+      fan(24, 700, '#e86a6a');
+      fan(370, 696, '#f3a14a');
+      d.fill('M250 770 c 0 -10, 16 -10, 16 0 Z', '#f6e6cc');
+    },
+  },
+  cangrejo: {
+    water: ['#46cfd2', '#25a6b4', '#1a7f94', '#135d74', '#0c4054'],
+    sun: 0.7,
+    rays: 1.2,
+    mote: '#f2fffd',
+    decor: (d) => {
+      // rocas de la orilla a los lados, arena con conchas y una estrella
+      d.fill('M0 712 C 100 698, 260 714, 390 702 V844 H0Z', '#dcc08a');
+      d.fill('M0 560 C 40 540, 90 560, 110 610 C 130 650, 120 700, 100 730 L0 740 Z', '#2c5560');
+      d.fill('M0 620 C 30 610, 60 630, 66 680 L 60 744 L0 748 Z', '#1f4049');
+      d.fill('M390 580 C 340 566, 300 600, 292 650 C 286 690, 300 720, 320 736 L390 740 Z', '#2c5560');
+      d.fill('M390 650 C 360 646, 340 670, 344 712 L 350 746 L390 748 Z', '#1f4049');
+      d.fill('M150 730 C 150 712, 190 708, 196 730 Z', '#7a8a86');
+      d.fill('M226 758 l6 -14 l6 14 l14 2 l-11 9 l4 14 l-13 -8 l-13 8 l4 -14 l-11 -9 Z', '#ff7a5c');
+      d.fill('M120 780 c 0 -10, 16 -10, 16 0 Z', '#f6e2c6');
+      d.fill('M290 790 c 0 -9, 14 -9, 14 0 Z', '#f1d6b8');
+      d.stroke('M20 600 L 40 596 M 330 620 L 350 616', '#9fd8c8', 3, 0.5);
+    },
+  },
+  globo: {
+    water: ['#3cc4d4', '#1c98b4', '#137396', '#0d5276', '#083858'],
+    sun: 0.55,
+    rays: 1,
+    mote: '#fff7d6',
+    decor: (d) => {
+      // laguna de coral: corales cerebro de colores y hierba marina
+      d.fill('M0 700 C 120 684, 250 700, 390 690 V844 H0Z', '#d6bd84');
+      const brain = (x, y, r, color, line) => {
+        d.fill(`M${x - r} ${y} A ${r} ${r * 0.8} 0 0 1 ${x + r} ${y} Z`, color);
+        for (let k = r * 0.3; k < r; k += r * 0.25) d.stroke(`M${x - k} ${y} A ${k} ${k * 0.8} 0 0 1 ${x + k} ${y}`, line, 2);
+      };
+      brain(60, 716, 40, '#f0a35a', '#c27a36');
+      brain(130, 724, 24, '#e86aa0', '#b2457a');
+      brain(320, 712, 46, '#b98cff', '#8a5fd0');
+      brain(250, 730, 22, '#5fd39a', '#3a9e6c');
+      for (const x of [180, 200, 214, 372]) for (let k = -1; k <= 1; k++) d.stroke(`M${x} 720 C ${x + k * 4} 700, ${x + k * 8} 686, ${x + k * 6} 664`, '#3f9e5c', 4);
+      d.fill('M0 770 C 130 756, 260 768, 390 758 V844 H0Z', '#c2a56c');
+    },
+  },
+  delfin: {
+    water: ['#3aa8e0', '#1f80c0', '#16609c', '#0f4478', '#0a2e56'],
+    sun: 0.55,
+    rays: 1.1,
+    mote: '#e8f7ff',
+    decor: (d) => {
+      // alta mar: delfines lejanos en silueta y el fondo muy abajo
+      const dolphin = (x, y, s, a) => {
+        d.fill(`M${x} ${y} C ${x + 20 * s} ${y - 14 * s}, ${x + 60 * s} ${y - 12 * s}, ${x + 76 * s} ${y - 2 * s} L ${x + 90 * s} ${y - 10 * s} L ${x + 86 * s} ${y + 2 * s} L ${x + 92 * s} ${y + 12 * s} L ${x + 76 * s} ${y + 4 * s} C ${x + 56 * s} ${y + 12 * s}, ${x + 18 * s} ${y + 10 * s}, ${x} ${y} Z`, '#0e4a7c', a);
+        d.fill(`M${x + 36 * s} ${y - 10 * s} L ${x + 46 * s} ${y - 24 * s} L ${x + 50 * s} ${y - 9 * s} Z`, '#0e4a7c', a);
+      };
+      dolphin(40, 380, 1, 0.35);
+      dolphin(250, 300, 0.7, 0.3);
+      dolphin(200, 560, 0.9, 0.25);
+      d.fill('M0 770 C 120 754, 270 770, 390 760 V844 H0Z', '#0b3460');
+    },
+  },
+  manta: {
+    water: ['#2f7ac0', '#1d5a9c', '#15427c', '#0e2e5e', '#081e42'],
+    sun: 0.35,
+    rays: 0.75,
+    mote: '#d6e6ff',
+    decor: (d) => {
+      // llanura de arena con ondas y una manta lejana planeando
+      d.fill('M60 420 C 100 400, 150 396, 195 412 C 240 396, 290 400, 330 420 C 290 432, 240 446, 195 452 C 150 446, 100 432, 60 420 Z', '#0f3a6c', 0.45);
+      d.stroke('M195 452 C 196 470, 192 486, 198 500', '#0f3a6c', 3, 0.45);
+      d.fill('M0 706 C 120 694, 260 708, 390 698 V844 H0Z', '#5c6f8a');
+      for (let y = 724; y < 830; y += 18) d.stroke(`M0 ${y} C 60 ${y - 6}, 120 ${y + 6}, 195 ${y} S 330 ${y - 6}, 390 ${y}`, '#7a8ca6', 2, 0.6);
+      d.fill('M90 716 C 90 700, 124 698, 128 716 Z', '#3e4e68');
+      d.fill('M290 720 C 292 706, 318 704, 322 720 Z', '#3e4e68');
+    },
+  },
+  tiburon: {
+    water: ['#245e96', '#173f70', '#0f2c54', '#091c3a', '#040e22'],
+    sun: 0.22,
+    rays: 0.5,
+    mote: '#cfe6f5',
+    decor: (d) => {
+      // barco hundido de lado, con ojos de buey y una cadena
+      const hull = '#0a2340';
+      d.fill('M20 690 C 30 640, 60 610, 120 604 L 330 600 C 360 610, 376 640, 380 690 Z', hull);
+      d.fill('M120 604 L 130 570 L 250 568 L 260 602 Z', hull);
+      d.fill('M186 568 h8 v-200 h-8 Z', hull);
+      d.fill('M150 420 h80 v6 h-80 Z', hull);
+      d.stroke('M190 372 L 120 604 M 194 372 L 300 600', hull, 1.5);
+      for (const x of [90, 140, 190, 240, 290, 340]) d.fill(`M${x - 8} 640 a 8 8 0 1 0 16 0 a 8 8 0 1 0 -16 0`, '#ffe6a0', 0.18);
+      d.stroke('M60 620 C 50 660, 70 690, 54 730', '#06182e', 4);
+      d.fill('M0 700 C 90 684, 200 700, 300 690 S 370 686, 390 692 V844 H0Z', '#061830');
+      d.fill('M0 770 C 120 756, 270 772, 390 762 V844 H0Z', '#030d1e');
+    },
+  },
+  rape: {
+    water: ['#121a46', '#0a1032', '#060a22', '#030514', '#010208'],
+    sun: 0.04,
+    rays: 0.12,
+    mote: '#c9ffef',
+    decor: (d) => {
+      // la fosa: casi a oscuras, chimeneas y lucecitas de animales que brillan
+      for (const [x, y, c] of [[60, 300, '#7ff0d0'], [320, 240, '#b48cff'], [250, 470, '#7ff0d0'], [90, 560, '#fff6a8'], [340, 600, '#7ff0d0'], [180, 380, '#b48cff']]) {
+        d.fill(`M${x - 10} ${y} a 10 10 0 1 0 20 0 a 10 10 0 1 0 -20 0`, c, 0.12);
+        d.fill(`M${x - 2.5} ${y} a 2.5 2.5 0 1 0 5 0 a 2.5 2.5 0 1 0 -5 0`, c, 0.7);
+      }
+      d.fill('M0 600 C 30 560, 70 580, 90 640 L 110 844 L 0 844 Z', '#05071a');
+      d.fill('M390 620 C 350 590, 320 620, 310 680 L 300 844 L 390 844 Z', '#05071a');
+      d.fill('M150 720 L 170 650 L 190 650 L 210 720 Z', '#090b22');
+      d.fill('M230 730 L 244 680 L 258 680 L 272 730 Z', '#090b22');
+      d.fill('M170 640 C 160 600, 200 590, 190 550 C 210 580, 196 620, 190 640 Z', '#4a4e7a', 0.25);
+      d.fill('M0 716 C 100 700, 260 716, 390 704 V844 H0Z', '#030414');
     },
   },
 };
@@ -2089,8 +2398,10 @@ function drawBanner() {
 }
 
 /**
- * Mira del cohete: un haz tan ancho como lo que rompe, con los bordes bien
- * marcados, y las burbujas que va a romper teñidas y parpadeando. El del
+ * Mira del cohete: un haz en cono que sale estrecho del cañón y se abre hasta
+ * el ancho de lo que rompe justo antes de la primera burbuja que toca (así
+ * nunca enseña de menos), con un degradado que se apaga hacia arriba y hacia
+ * los bordes. Las burbujas que va a romper se tiñen y parpadean. El del
  * supercohete es más ancho y dorado.
  */
 function drawRocketAim() {
@@ -2104,43 +2415,61 @@ function drawRocketAim() {
   if (len < 1) return;
   const ux = (b.x - a.x) / len;
   const uy = (b.y - a.y) / len;
-  // perpendicular a la recta, para los dos bordes del haz
-  const nx = -uy * reach;
-  const ny = ux * reach;
+  // perpendicular a la recta, de largo 1
+  const px = -uy;
+  const py = ux;
+  // el cono se abre hasta la primera burbuja (o hasta media pantalla si no toca ninguna)
+  const open = Math.min(len, Math.max(3 * R, (shot.cells[0]?.dist ?? len * 0.6) - R));
+  const apex = R * 0.35;
+  const at = (d, w) => ({ x: a.x + ux * d + px * w, y: a.y + uy * d + py * w });
+  const outline = [at(0, apex), at(open, reach), at(len, reach), at(len, -reach), at(open, -reach), at(0, -apex)];
+  const trace = () => {
+    ctx.beginPath();
+    outline.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)));
+    ctx.closePath();
+  };
 
   ctx.save();
-  // relleno del haz: más intenso cerca del cañón y desvaneciéndose hacia arriba
-  const fill = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
   const tone = sup ? '255,214,90' : '255,160,60';
-  fill.addColorStop(0, `rgba(${tone},${0.42 + 0.1 * pulse})`);
-  fill.addColorStop(1, `rgba(${tone},${0.18 + 0.06 * pulse})`);
-  ctx.fillStyle = fill;
-  ctx.beginPath();
-  ctx.moveTo(a.x + nx, a.y + ny);
-  ctx.lineTo(b.x + nx, b.y + ny);
-  ctx.lineTo(b.x - nx, b.y - ny);
-  ctx.lineTo(a.x - nx, a.y - ny);
-  ctx.closePath();
+  // degradado a lo largo: intenso en el cañón, apagándose hacia arriba
+  const along = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
+  along.addColorStop(0, `rgba(${tone},${0.6 + 0.15 * pulse})`);
+  along.addColorStop(Math.min(0.9, open / len), `rgba(${tone},${0.38 + 0.1 * pulse})`);
+  along.addColorStop(1, `rgba(${tone},0.06)`);
+  ctx.fillStyle = along;
+  trace();
+  ctx.fill();
+  // degradado a lo ancho: más claro en el centro, como un foco
+  const across = ctx.createLinearGradient(a.x - px * reach, a.y - py * reach, a.x + px * reach, a.y + py * reach);
+  across.addColorStop(0, 'rgba(255,255,255,0)');
+  across.addColorStop(0.5, `rgba(255,250,225,${0.22 + 0.08 * pulse})`);
+  across.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = across;
+  trace();
   ctx.fill();
 
-  // bordes: líneas claras con un trazo que corre hacia arriba
+  // bordes del cono: líneas claras con brillo, que se apagan hacia arriba
+  const edge = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
+  edge.addColorStop(0, sup ? 'rgba(255,241,168,1)' : 'rgba(255,210,122,1)');
+  edge.addColorStop(1, sup ? 'rgba(255,241,168,0.25)' : 'rgba(255,210,122,0.25)');
   ctx.shadowColor = sup ? '#ffd23a' : '#ff8c28';
   ctx.shadowBlur = 10;
-  ctx.strokeStyle = sup ? '#fff1a8' : '#ffd27a';
-  ctx.lineWidth = 3;
-  ctx.lineCap = 'round';
-  ctx.setLineDash([14, 10]);
-  ctx.lineDashOffset = -state.time * 60;
+  ctx.strokeStyle = edge;
+  ctx.lineWidth = 2.5;
+  ctx.lineJoin = 'round';
   for (const side of [1, -1]) {
+    const e = [at(0, side * apex), at(open, side * reach), at(len, side * reach)];
     ctx.beginPath();
-    ctx.moveTo(a.x + side * nx, a.y + side * ny);
-    ctx.lineTo(b.x + side * nx, b.y + side * ny);
+    e.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)));
     ctx.stroke();
   }
-  // eje central, más fino
+  // eje central: un trazo fino que corre hacia arriba
+  ctx.shadowBlur = 0;
   ctx.lineWidth = 2;
+  ctx.lineCap = 'round';
   ctx.setLineDash([6, 12]);
-  ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+  ctx.lineDashOffset = -state.time * 60;
+  ctx.strokeStyle = 'rgba(255,255,255,0.7)';
   ctx.beginPath();
   ctx.moveTo(a.x, a.y);
   ctx.lineTo(b.x, b.y);
@@ -2714,9 +3043,30 @@ function drawEffects() {
       ctx.fillStyle = `rgba(255,255,255,${0.9 * (1 - k)})`;
       ctx.fillRect(0, -1.5, len, 3);
       ctx.restore();
-    } else if (e.type === 'blast') {
-      // onda expansiva de la mina: destello y anillo que se abre
+    } else if (e.type === 'smoke') {
+      if (e.t < 0) continue;
       const k = e.t / e.life;
+      const r = e.size + e.grow * (1 - (1 - k) ** 2);
+      const a = 0.75 * (1 - k) * Math.min(1, e.t * 8);
+      const g = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, r);
+      g.addColorStop(0, `rgba(${e.shade},${e.shade},${e.shade + 10},${a})`);
+      g.addColorStop(0.6, `rgba(${e.shade},${e.shade},${e.shade + 10},${a * 0.5})`);
+      g.addColorStop(1, `rgba(${e.shade},${e.shade},${e.shade + 10},0)`);
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, r, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (e.type === 'blast') {
+      // onda expansiva de la mina: bola de fuego, destello y anillo que se abre
+      const k = e.t / e.life;
+      const fire = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, R * (1.5 + 2.5 * k));
+      fire.addColorStop(0, `rgba(255,250,220,${0.95 * (1 - k)})`);
+      fire.addColorStop(0.4, `rgba(255,170,60,${0.8 * (1 - k)})`);
+      fire.addColorStop(1, 'rgba(200,60,20,0)');
+      ctx.fillStyle = fire;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, R * (1.5 + 2.5 * k), 0, Math.PI * 2);
+      ctx.fill();
       const flash = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, R * 5);
       flash.addColorStop(0, `rgba(255,230,170,${0.7 * (1 - k)})`);
       flash.addColorStop(1, 'rgba(255,160,80,0)');
@@ -2980,6 +3330,7 @@ for (const kind of SPECIALS) {
 
 ui.maps.addEventListener('click', () => {
   sfx.ensure();
+  if (state.inLevel) forfeitSuper(); // salir a medias es no terminar el nivel
   showTheme(themeOf(state.levelIndex));
 });
 

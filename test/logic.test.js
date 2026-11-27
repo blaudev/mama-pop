@@ -10,6 +10,7 @@ import {
   lowestOccupiedRow,
   isEmpty,
   colorsOnBoard,
+  colorsInView,
   cellCenter,
   nearestEmptyCell,
   simulateShot,
@@ -27,8 +28,10 @@ import {
   SUPER_ROCKET_REACH,
   chargeRocket,
   normalizeCharge,
-  rocketToArm,
+  armRocket,
+  loseSuper,
   SPECIALS_MAX,
+  specialMax,
   fireRocket,
   ROCKET,
   addSpecial,
@@ -450,38 +453,66 @@ test('chargeRocket: sube con cada disparo que explota, vuelve a 0 al fallar', ()
 });
 
 test('chargeRocket: al llenarse da un supercohete y empieza de nuevo', () => {
-  assert.equal(SUPER_CHARGE, 10);
+  assert.equal(SUPER_CHARGE, 20);
   let charge = 0;
   const fulls = [];
-  for (let i = 1; i <= 20; i++) {
+  for (let i = 1; i <= 40; i++) {
     const res = chargeRocket(charge, 3);
     charge = res.charge;
     if (res.full) fulls.push(i);
   }
-  assert.deepEqual(fulls, [10, 20]);
+  assert.deepEqual(fulls, [20, 40]);
   assert.equal(charge, 0);
+});
+
+test('chargeRocket: con un supercohete guardado la carga no se mueve, ni al acertar ni al fallar', () => {
+  assert.deepEqual(chargeRocket(0, 4, { holding: true }), { charge: 0, full: false });
+  assert.deepEqual(chargeRocket(0, 0, { holding: true }), { charge: 0, full: false });
+  assert.deepEqual(chargeRocket(9, 4, { holding: true }), { charge: 9, full: false }, 'no da otro');
+});
+
+test('addSpecial: del supercohete solo se guarda uno', () => {
+  assert.equal(specialMax(SUPER_ROCKET), 1);
+  assert.deepEqual(addSpecial({}, SUPER_ROCKET), { superRocket: 1 });
+  assert.deepEqual(addSpecial({ superRocket: 1 }, SUPER_ROCKET), { superRocket: 1 });
+  assert.deepEqual(normalizeSpecials({ superRocket: 4 }), { superRocket: 1 });
 });
 
 test('normalizeCharge: solo enteros entre 0 y SUPER_CHARGE - 1', () => {
   assert.equal(normalizeCharge(7), 7);
   assert.equal(normalizeCharge(0), 0);
-  assert.equal(normalizeCharge(10), 0);
+  assert.equal(normalizeCharge(19), 19);
+  assert.equal(normalizeCharge(20), 0);
   assert.equal(normalizeCharge(-1), 0);
   assert.equal(normalizeCharge('3'), 0);
   assert.equal(normalizeCharge(null), 0);
 });
 
-test('rocketToArm: el supercohete va primero; si ya hay uno cargado, ese', () => {
-  assert.equal(rocketToArm(null, { rocket: 2 }), ROCKET);
-  assert.equal(rocketToArm(null, { rocket: 2, superRocket: 1 }), SUPER_ROCKET);
-  assert.equal(rocketToArm(null, { superRocket: 1 }), SUPER_ROCKET);
-  assert.equal(rocketToArm(ROCKET, { rocket: 1, superRocket: 1 }), ROCKET);
-  assert.equal(rocketToArm(SUPER_ROCKET, { superRocket: 1 }), SUPER_ROCKET);
-  assert.equal(rocketToArm(MINE, { superRocket: 1 }), SUPER_ROCKET);
+test('armRocket: con la mejora, el cohete sale como supercohete', () => {
+  assert.equal(armRocket(null, { rocket: 2 }), ROCKET);
+  assert.equal(armRocket(null, { rocket: 2, superRocket: 1 }), SUPER_ROCKET);
+  assert.equal(armRocket(MINE, { rocket: 1, superRocket: 1 }), SUPER_ROCKET, 'cambia la mina por el cohete');
+});
+
+test('armRocket: sin cohetes no carga nada, aunque se tenga la mejora', () => {
+  assert.equal(armRocket(null, { superRocket: 1 }), null);
+  assert.equal(armRocket(MINE, { superRocket: 1 }), MINE);
+});
+
+test('armRocket: si ya hay un cohete cargado, lo descarga', () => {
+  assert.equal(armRocket(ROCKET, { rocket: 1 }), null);
+  assert.equal(armRocket(SUPER_ROCKET, { rocket: 1, superRocket: 1 }), null);
+});
+
+test('loseSuper: quita la mejora y deja lo demás', () => {
+  const inv = { rocket: 2, mine: 1, superRocket: 1 };
+  assert.deepEqual(loseSuper(inv), { rocket: 2, mine: 1 });
+  assert.deepEqual(inv, { rocket: 2, mine: 1, superRocket: 1 }, 'sin tocar el original');
+  assert.deepEqual(loseSuper({ rocket: 1 }), { rocket: 1 });
 });
 
 test('normalizeSpecials: también guarda supercohetes', () => {
-  assert.deepEqual(normalizeSpecials({ superRocket: 2 }), { superRocket: 2 });
+  assert.deepEqual(normalizeSpecials({ superRocket: 1 }), { superRocket: 1 });
 });
 
 // ── Mina ─────────────────────────────────────────────────────────────────
@@ -693,6 +724,23 @@ test('bicolor: no une un grupo de un color con uno del otro', () => {
   assert.equal(g.cells[0][2], 3);
   assert.equal(g.cells[0][3], 3);
   assert.equal(matchPreview(g, 1, 3, 1).cells.length, 0, 'los verdes no cuentan para el rojo');
+});
+
+test('colorsOnBoard con filas: solo cuenta los colores de esas filas', () => {
+  const g = gridFrom(['11...', '2....', '3....', '4....']);
+  assert.deepEqual(colorsOnBoard(g, { from: 2, to: 3 }), [3, 4]);
+  assert.deepEqual(colorsOnBoard(g, { from: 3, to: 99 }), [4], 'no se sale del tablero');
+});
+
+test('colorsInView: los colores de la pantalla, no los de la parte del mapa que no se ve', () => {
+  // arriba hay rojas (1) que no se ven; en pantalla, filas 2 y 3, solo 3 y 4
+  const g = gridFrom(['11...', '2....', '3....', '4....']);
+  assert.deepEqual(colorsInView(g, { from: 2, to: 3 }), [3, 4]);
+});
+
+test('colorsInView: si en pantalla no queda ningún color, los de todo el tablero', () => {
+  const g = gridFrom(['11...', '2....', '.....', '.....']);
+  assert.deepEqual(colorsInView(g, { from: 2, to: 3 }), [1, 2]);
 });
 
 test('colorsOnBoard cuenta los dos colores de una bicolor y no el de una tapada', () => {

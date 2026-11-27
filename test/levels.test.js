@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { findFloating, colorsOnBoard, findCluster, bicolorValue, shellValue, isBicolor, isShell } from '../src/logic.js';
 import { playLevel } from '../tools/bot.js';
+import { singlesRatio, MAX_SINGLES, MIN_ROWS } from '../tools/generate-maps.js';
 import {
   BOARD,
   COLOR_KEYS,
@@ -36,15 +37,19 @@ test('parseMap lee las bicolores (una letra por pareja de colores) y las de dos 
   assert.deepEqual(g.cells[1], [shellValue(5), null, null]);
 });
 
-test('bicolores y de dos golpes solo en los niveles difíciles: ninguna del 1 al 4 y de las dos del 5 al 10', () => {
+test('bicolores y de dos golpes: ninguna en los niveles 1 y 2, y de las dos del 3 al 10, unas cuantas', () => {
   for (const theme of THEMES) {
     theme.maps.forEach((level, i) => {
       const cells = parseMap(level.map).cells.flat();
       const bicolors = cells.filter(isBicolor).length;
       const shells = cells.filter(isShell).length;
       const where = `${theme.name} ${i + 1}`;
-      if (i < 4) assert.equal(bicolors + shells, 0, where);
-      else assert.ok(bicolors >= 2 && shells >= 2, `${where}: ${bicolors} bicolores, ${shells} de dos golpes`);
+      if (i < 2) assert.equal(bicolors + shells, 0, where);
+      else {
+        assert.ok(bicolors >= 4 && shells >= 4, `${where}: ${bicolors} bicolores, ${shells} de dos golpes`);
+        // al menos 5 de cada 100 burbujas, entre las dos
+        assert.ok((bicolors + shells) / bubbleCount(level.map) >= 0.05, `${where}: pocas especiales`);
+      }
     });
   }
 });
@@ -103,9 +108,21 @@ test('normalizeProgress arregla datos guardados rotos', () => {
   assert.equal(normalizeProgress({ unlocked: -3 }, 10).unlocked, 1);
 });
 
-test('hay 5 temáticas de 10 niveles, todos con nombre y límite de disparos', () => {
-  assert.equal(THEMES.length, 5);
-  assert.equal(LEVELS.length, 50);
+test('normalizeProgress: quien lo tenía todo ganado puede seguir con las temáticas nuevas', () => {
+  // Así quedó guardado al ganar los 50 niveles cuando solo había 5 temáticas:
+  // `unlocked` no podía pasar de 50.
+  const saved = { unlocked: 50, stars: Array(50).fill(3) };
+  const p = normalizeProgress(saved, 120);
+  assert.equal(p.unlocked, 51);
+  assert.equal(themeProgress(p, 5).unlocked, true);
+  assert.equal(themeProgress(p, 5).next, 0);
+  // sin estrellas de más no se abre nada
+  assert.equal(normalizeProgress({ unlocked: 3, stars: [3, 2] }, 120).unlocked, 3);
+});
+
+test('hay 12 temáticas de 10 niveles, todos con nombre y límite de disparos', () => {
+  assert.equal(THEMES.length, 12);
+  assert.equal(LEVELS.length, 120);
   for (const theme of THEMES) {
     assert.ok(theme.name && theme.zone && theme.accent);
     assert.equal(theme.maps.length, LEVELS_PER_THEME);
@@ -122,6 +139,13 @@ test('en cada temática la dificultad sube: los 3 últimos niveles piden más di
   for (const theme of THEMES) {
     const shots = theme.maps.map((m) => m.shots);
     assert.ok(avg(shots.slice(-3)) > avg(shots.slice(0, 3)), `${theme.name}: ${shots.join(' ')}`);
+  }
+});
+
+test('hay mapas de largos distintos: en cada temática, el más largo tiene al menos un 50 % más de filas que el más corto', () => {
+  for (const theme of THEMES) {
+    const rows = theme.maps.map((m) => m.map.length);
+    assert.ok(Math.max(...rows) >= 1.5 * Math.min(...rows), `${theme.name}: ${rows.join(' ')}`);
   }
 });
 
@@ -184,7 +208,7 @@ test('themeProgress: al empezar solo está abierta la primera, en su nivel 1', (
   const p = emptyProgress();
   assert.deepEqual(
     THEMES.map((_, t) => themeProgress(p, t).unlocked),
-    [true, false, false, false, false],
+    THEMES.map((_, t) => t === 0),
   );
   assert.equal(themeProgress(p, 0).next, 0);
 });
@@ -217,7 +241,10 @@ for (const [i, level] of LEVELS.entries()) {
       assert.equal(row.length, BOARD.cols, `fila «${row}» no mide ${BOARD.cols}`);
       for (const ch of row) assert.ok(ch === '.' || ch === 'v' || (COLOR_KEYS + BICOLOR_KEYS + SHELL_KEYS).includes(ch), `letra desconocida «${ch}»`);
     }
-    assert.ok(level.map.length >= 28, 'el mapa es pequeño');
+    assert.ok(level.map.length >= MIN_ROWS, 'el mapa es pequeño');
+    // casi todas las perlas tienen pareja: las sueltas frustran
+    const singles = singlesRatio(level.map);
+    assert.ok(singles <= MAX_SINGLES.to, `${Math.round(singles * 100)} % de perlas sin pareja`);
     // Simétrico de izquierda a derecha, forma y colores. Las filas desplazadas
     // (2.ª, 4.ª…) tienen una bola menos para que el eje caiga en el centro.
     level.map.forEach((row, r) => {
