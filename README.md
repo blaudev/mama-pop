@@ -25,10 +25,19 @@ que puede explotar algo desde el lanzador: el juego prueba hacia dónde se puede
 grupos escondidos detrás de burbujas de otros colores (`reachableColors` en `src/logic.js`). El bot de
 `tools/bot.js` elige las bolas igual, así que los límites de disparos ya lo tienen en cuenta.
 
-**Cohete:** cada 3 disparos seguidos explotando algo ganas un cohete, que se guarda en la barra de abajo (el
+**Cohete:** cada 6 disparos seguidos explotando algo ganas un cohete, que se guarda en la barra de abajo (el
 número dice cuántos tienes; se guardan y pasan de un mapa a otro). Tócalo (o pulsa R) para cargarlo en el cañón cuando quieras; vuelve a
 tocarlo, o toca el lanzador, para guardarlo. Sale recto hacia donde apuntes, sin rebotar, y abre una franja de
-unas 3 burbujas de ancho en todo lo que se ve; lo que se queda colgando cae. No gasta disparos.
+unas 3 burbujas de ancho en todo lo que se ve; lo que se queda colgando cae. No gasta disparos. Al apuntar, un haz
+en cono con degradado sale del cañón y se abre hasta el ancho de la franja antes de la primera burbuja que toca;
+las que va a romper se tiñen de naranja.
+
+**Supercohete:** el icono del cohete se va llenando de dorado con cada perla normal que explota algo, y cuenta
+abajo «7/20». Si a medio llenar una perla no explota nada, la carga vuelve a 0. Al llegar a 20 consigues el
+supercohete (y un cohete para estrenarlo): es una mejora, no un premio de un solo uso. Desde entonces cada cohete
+que lances sale como supercohete (morado y dorado), que abre una franja el doble de ancha, unas 5 burbujas, y la
+mejora no se gasta al lanzarlo. La carga se queda en 20/20 sin moverse. Solo se pierde si no terminas el nivel:
+si lo pierdes o sales a medias por el botón de mapas. Al terminarlo se conserva y pasa al siguiente.
 
 **Anclas (en el mapa):** burbujas de metal con una flecha dorada que vienen puestas en algunos mapas (`v` en los
 mapas). No tienen color. La flecha apunta en una sola dirección: arriba, abajo, a un lado o en oblicuo. Cuando
@@ -37,23 +46,29 @@ parte del mapa que se ve. Si rompe otra ancla, esa salta también hacia donde ap
 disparo, todas las flechas giran un paso en el sentido del reloj. El cohete y la mina también las hacen saltar,
 y la mira marca lo que rompería. Aparecen a partir del 4.º nivel de la Tortuga y del 3.º del Pulpo.
 
-**Bicolores (en el mapa):** perlas mitad de un color y mitad de otro. Valen por cualquiera de sus dos colores:
+**Bicolores (en el mapa):** perlas partidas en diagonal, mitad de un color y mitad de otro. Valen por cualquiera de sus dos colores:
 una roja y verde explota con un grupo de rojas o con uno de verdes. No unen un grupo de un color con uno del otro.
 
-**De dos golpes (en el mapa):** salen tapadas por una concha de color arena que no cuenta para ningún grupo. Las
+**De dos golpes (en el mapa):** salen tapadas: una perla de nácar morada con un «?», que no cuenta para ningún grupo. Las
 destapa una bola que se pegue a ellas, sea del color que sea, o una explosión a su lado; desde entonces son perlas
 normales de su color. El cohete, la mina y las anclas las rompen directamente, tapadas o no.
 
-Las bicolores y las de dos golpes solo salen en los niveles difíciles, del 5.º al 10.º de cada temática.
+Las bicolores y las de dos golpes salen del 3.º al 10.º nivel de cada temática, unas 3-6 de cada 100 perlas de
+cada tipo (más cuanto más difícil).
 
-**Mina:** se gana cada vez que un disparo explota 3 o más bolas del mismo color. Vuela como una perla y, al pegarse, explota y
-rompe todo lo que haya a 2 casillas, sea del color que sea. Tecla M.
+**Mapas:** casi todas las perlas tienen pareja (como mucho un 22 % sueltas), para que siempre haya algo que
+romper; la dificultad viene de los disparos justos, con un margen sobre lo que necesita el bot del 20 % en los
+fáciles al 5 % en los difíciles. El largo cambia de un nivel a otro: unos cortos y otros bastante más largos.
 
-**Perla arcoíris:** se gana cuando caen 6 o más a la vez. Toma el color del grupo más grande que toque y lo
+**Mina:** se gana cuando un disparo explota 5 o más bolas de golpe. Vuela como una perla y, al pegarse, explota y
+rompe todo lo que haya a 2 casillas, sea del color que sea, con una bola de fuego, humo y un «bum» hondo que acaba en burbujeo. Tecla M.
+
+**Perla arcoíris:** se gana cuando caen 10 o más a la vez. Toma el color del grupo más grande que toque y lo
 explota si llega a 3. Tecla A.
 
 Las tres se guardan en la fila de iconos bajo el lanzador, pasan de un mapa a otro, se cargan cuando quieras (solo
-una a la vez) y no gastan disparos. Solo las perlas normales dan premios.
+una a la vez) y no gastan disparos. Solo las perlas normales dan premios. Se guardan como mucho 5 de cada una
+(los inventarios guardados con más se recortan a 5 al abrir el juego).
 
 **Reglas:** junta 3 o más del mismo color para explotarlas; lo que se queda colgando cae y puntúa
 doble. Los mapas son más altos que la pantalla: al empezar se recorren de arriba abajo y, a medida
@@ -123,7 +138,7 @@ node tools/bot.js
 ```
 
 Para probar, abre `http://localhost:5173/?debug` y usa `bubblePop.startLevel(n)` en la consola
-del navegador para saltar a cualquier nivel (0 a 49; de 10 en 10 por temática), y `bubblePop.giveSpecial('rocket' | 'mine' | 'rainbow')` para sumar una bola especial.
+del navegador para saltar a cualquier nivel (0 a 49; de 10 en 10 por temática), y `bubblePop.giveSpecial('rocket' | 'superRocket' | 'mine' | 'rainbow')` para sumar una bola especial.
 
 ## Estructura
 

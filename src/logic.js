@@ -203,10 +203,23 @@ export function isEmpty(grid) {
   return lowestOccupiedRow(grid) === -1;
 }
 
-export function colorsOnBoard(grid) {
+export function colorsOnBoard(grid, rows = null) {
   const set = new Set();
-  for (const row of grid.cells) for (const v of row) for (const color of colorsOf(v)) set.add(color);
+  const from = rows ? Math.max(0, rows.from) : 0;
+  const to = rows ? Math.min(grid.rows - 1, rows.to) : grid.rows - 1;
+  for (let r = from; r <= to; r++) for (const v of grid.cells[r]) for (const color of colorsOf(v)) set.add(color);
   return [...set].sort((a, b) => a - b);
+}
+
+/**
+ * Colores de los que pueden salir las bolas del lanzador: los que se ven en
+ * pantalla (filas `rows`, ver visibleRows), para no dar uno que solo está en
+ * la parte del mapa que aún no se ve. Si en pantalla no queda ninguno, los
+ * de todo el tablero.
+ */
+export function colorsInView(grid, rows) {
+  const seen = colorsOnBoard(grid, rows);
+  return seen.length ? seen : colorsOnBoard(grid);
 }
 
 // ── Anclas del mapa ──────────────────────────────────────────────────────
@@ -519,13 +532,63 @@ export function reachableColors(grid, start, R, width, { angles = 60, minAngle =
 
 export const ROCKET = 'rocket';
 /** Cada cuántos disparos seguidos explotando algo se gana un cohete. */
-export const ROCKET_STREAK = 3;
+export const ROCKET_STREAK = 6;
 /**
  * Alcance del cohete a cada lado de su recta, como múltiplo de R: rompe las
  * burbujas cuyo centro queda más cerca que esto. Con 2.1 abre una franja de
  * unas 3 burbujas de ancho (3 en las filas alineadas con él, 2 en las otras).
  */
 export const ROCKET_REACH = 2.1;
+
+// ── Supercohete ──────────────────────────────────────────────────────────
+// Una mejora del cohete: mientras se tiene, cada cohete que se lanza sale como
+// supercohete, más ancho. Se gana llenando la carga del icono del cohete
+// (SUPER_CHARGE disparos seguidos que explotan algo, sin fallar ninguno). No
+// se gasta al lanzar; solo se pierde si no se termina el nivel. En el
+// inventario es `superRocket: 1`.
+
+export const SUPER_ROCKET = 'superRocket';
+/** Disparos seguidos explotando algo que llenan la carga del supercohete. */
+export const SUPER_CHARGE = 20;
+/** Alcance del supercohete (ver ROCKET_REACH): el doble de ancho, unas 5 burbujas (5 en las filas alineadas con él, 4 en las otras). */
+export const SUPER_ROCKET_REACH = 4.2;
+
+/**
+ * Carga del supercohete tras un disparo normal: sube uno si explota algo y
+ * vuelve a cero si falla. Al llegar a SUPER_CHARGE da un supercohete y empieza
+ * de nuevo. Mientras se tiene un supercohete guardado (`holding`) la carga no
+ * se mueve: ya está conseguido, no hace falta rellenarla y un fallo no lo quita.
+ *
+ * @returns {{ charge: number, full: boolean }}
+ */
+export function chargeRocket(charge, popped, { holding = false } = {}) {
+  if (holding) return { charge: charge || 0, full: false };
+  if (!popped) return { charge: 0, full: false };
+  const next = (charge || 0) + 1;
+  return next >= SUPER_CHARGE ? { charge: 0, full: true } : { charge: next, full: false };
+}
+
+/** Carga leída del almacenamiento: un entero entre 0 y SUPER_CHARGE - 1. */
+export function normalizeCharge(raw) {
+  return Number.isInteger(raw) && raw > 0 && raw < SUPER_CHARGE ? raw : 0;
+}
+
+/**
+ * Qué queda cargado al tocar el botón del cohete: si ya había un cohete
+ * cargado, se descarga; si no quedan cohetes, nada cambia; si quedan, se carga
+ * como supercohete si se tiene la mejora, o como cohete normal.
+ */
+export function armRocket(armed, inv) {
+  if (armed === ROCKET || armed === SUPER_ROCKET) return null;
+  if (!(inv[ROCKET] > 0)) return armed;
+  return inv[SUPER_ROCKET] > 0 ? SUPER_ROCKET : ROCKET;
+}
+
+/** Inventario sin la mejora del supercohete (al no terminar un nivel). */
+export function loseSuper(inv) {
+  const { [SUPER_ROCKET]: _, ...rest } = inv;
+  return rest;
+}
 
 /** ¿Esta racha (disparos seguidos explotando algo) da un cohete? */
 export function earnsRocket(streak) {
@@ -536,11 +599,12 @@ export function earnsRocket(streak) {
  * Recorrido recto del cohete desde `start` con ángulo `angle` (como en
  * simulateShot) hasta que sale por arriba (`topY`) o por un lado. Devuelve
  * los dos extremos y las casillas que rompe, de la más cercana a la más
- * lejana, cada una con la distancia recorrida al llegar a ella.
+ * lejana, cada una con la distancia recorrida al llegar a ella. `reach` es
+ * el ancho a cada lado de la recta, en px (el del supercohete es mayor).
  *
  * @returns {{ points: {x:number,y:number}[], cells: {row:number,col:number,dist:number}[] }}
  */
-export function rocketPath(grid, start, angle, R, width, topY) {
+export function rocketPath(grid, start, angle, R, width, topY, reach = ROCKET_REACH * R) {
   const dx = Math.cos(angle);
   const dy = -Math.sin(angle);
   // distancia hasta salir por arriba o por un lado (el cohete sale entero de la pantalla)
@@ -550,7 +614,6 @@ export function rocketPath(grid, start, angle, R, width, topY) {
   if (!Number.isFinite(len) || len < 0) len = 0;
   const end = { x: start.x + dx * len, y: start.y + dy * len };
 
-  const reach = R * ROCKET_REACH;
   const cells = [];
   for (let r = 0; r < grid.rows; r++) {
     for (let c = 0; c < grid.cols; c++) {
@@ -579,9 +642,20 @@ export function fireRocket(grid, cells, { visible = null } = {}) {
 // cuando se quiere: primero se «arman» (se cargan en el cañón) y se gastan
 // al disparar.
 
-/** Inventario con una más de `kind`. */
+/**
+ * Máximo de cada especial que se puede guardar. Así no se acumulan cientos
+ * y siguen siendo un premio que se usa, no una reserva infinita.
+ */
+export const SPECIALS_MAX = 5;
+
+/** Máximo que se puede guardar de `kind`: del supercohete, uno (se usa y se vuelve a cargar). */
+export function specialMax(kind) {
+  return kind === SUPER_ROCKET ? 1 : SPECIALS_MAX;
+}
+
+/** Inventario con una más de `kind` (si no está ya en el máximo). */
 export function addSpecial(inv, kind) {
-  return { ...inv, [kind]: (inv[kind] ?? 0) + 1 };
+  return { ...inv, [kind]: Math.min((inv[kind] ?? 0) + 1, specialMax(kind)) };
 }
 
 /** Gasta una de `kind` si queda alguna: { inv, ok }. */
@@ -601,14 +675,16 @@ export function toggleArmed(armed, inv, kind) {
 
 /**
  * Inventario leído del almacenamiento: solo contadores enteros y positivos de
- * especiales conocidas. Cualquier otra cosa (datos viejos o rotos) se ignora.
+ * especiales conocidas, como mucho specialMax de cada una (las que se
+ * guardaron antes del máximo se recortan). Cualquier otra cosa (datos viejos
+ * o rotos) se ignora.
  */
 export function normalizeSpecials(raw) {
   const out = {};
   if (raw && typeof raw === 'object') {
-    for (const kind of SPECIALS) {
+    for (const kind of [...SPECIALS, SUPER_ROCKET]) {
       const n = raw[kind];
-      if (Number.isInteger(n) && n > 0) out[kind] = n;
+      if (Number.isInteger(n) && n > 0) out[kind] = Math.min(n, specialMax(kind));
     }
   }
   return out;
@@ -689,18 +765,20 @@ export function placeRainbow(grid, r, c, fallback, opts = {}) {
 
 export const SPECIALS = [ROCKET, MINE, RAINBOW];
 /** Grupo que hay que romper de un disparo para ganar una mina. */
-export const MINE_GROUP = 3;
+export const MINE_GROUP = 5;
 /** Burbujas que tienen que caer a la vez para ganar una perla arcoíris. */
-export const RAINBOW_DROP = 6;
+export const RAINBOW_DROP = 10;
 
 /**
  * Especiales que gana un disparo normal: un cohete cada ROCKET_STREAK de
  * racha, una mina si rompe un grupo de MINE_GROUP o más y una perla arcoíris
- * si hace caer RAINBOW_DROP o más.
+ * si hace caer RAINBOW_DROP o más. Si además ha llenado la carga
+ * (`charged`, ver chargeRocket), el cohete es un supercohete.
  */
-export function earnedSpecials(streak, popped, dropped) {
+export function earnedSpecials(streak, popped, dropped, charged = false) {
   const out = [];
-  if (earnsRocket(streak)) out.push(ROCKET);
+  if (charged) out.push(SUPER_ROCKET);
+  else if (earnsRocket(streak)) out.push(ROCKET);
   if (popped >= MINE_GROUP) out.push(MINE);
   if (dropped >= RAINBOW_DROP) out.push(RAINBOW);
   return out;
